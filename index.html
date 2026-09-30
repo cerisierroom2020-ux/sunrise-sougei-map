@@ -660,6 +660,14 @@ async function makeBaseLayer() {
   try {
     if (!window.maplibregl || !L.maplibreGL) throw new Error('no maplibre');
     const style = await fetch(STYLE_URL).then(r => r.json());
+    // 建物は立体（3D）をやめ、平面（2D）でどの倍率でも表示する
+    style.layers = style.layers.filter(l => l.type !== 'fill-extrusion');
+    const bld = style.layers.find(l => l.id === 'building');
+    if (bld) {
+      delete bld.maxzoom;
+      bld.paint['fill-color'] = '#E6E4E0';
+      bld.paint['fill-outline-color'] = ['interpolate', ['linear'], ['zoom'], 13, 'rgba(200,196,190,0.3)', 16, '#CFCAC3'];
+    }
     // 地名・道路名・施設名を日本語表記にする
     for (const l of style.layers) {
       const tf = l.layout && l.layout['text-field'];
