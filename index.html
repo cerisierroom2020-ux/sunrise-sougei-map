@@ -390,7 +390,7 @@ body.navigating .leaflet-bottom,body.has-sheet .leaflet-bottom{display:none}
     <button class="btn primary" id="btnMigrate" style="width:100%" hidden></button>
     <button class="btn" id="btnImport" style="width:100%">Googleマップのピンを取り込む</button>
     <div class="status"><span class="status-dot" id="statusDot"></span><span id="statusText"></span></div>
-    <div>アプリの版：2026-09-30 建物2D</div>
+    <div>アプリの版：2026-09-30 Googleマップ風の配色</div>
   </footer>
 </aside>
 
@@ -657,18 +657,52 @@ function startApp() {
   buildCatInputs(); buildFilters();
 }
 
+// Googleマップに近い配色：薄い灰色の地面、白い道路に細い灰色の縁、幹線は青みの灰色、建物はかなり拡大した時だけ薄く
+const GMAP = {
+  bg: '#F4F4F6', park: '#C4E9CD', green: '#D4EFDA', water: '#9FD6F2',
+  hospital: '#FBE2E0', school: '#E6E7EB', cemetery: '#DDEBDD',
+  road: '#FFFFFF', roadCase: '#D5D9E0', path: '#E6E8EC',
+  major: '#D9E0EA', majorCase: '#C6CEDA', mw: '#C7D3E6', mwCase: '#AFBED4',
+  rail: '#C4C9D1', text: '#5F6368', roadText: '#5E6A7A', waterText: '#4A86B8',
+  bld: '#EAEAED', bldLine: '#DEDEE3',
+};
+function googleize(style) {
+  const drop = new Set(['natural_earth', 'park_outline', 'road_area_pattern', 'landuse_residential', 'landuse_track', 'landuse_pitch', 'poi_r7', 'poi_r20']);
+  style.layers = style.layers.filter(l => l.type !== 'fill-extrusion' && l.type !== 'raster' && !drop.has(l.id));
+  for (const l of style.layers) {
+    const id = l.id, p = (l.paint = l.paint || {});
+    if (l.type === 'background') p['background-color'] = GMAP.bg;
+    else if (id === 'park') { p['fill-color'] = GMAP.park; p['fill-opacity'] = 1; }
+    else if (/^landcover_(wood|grass|wetland)$/.test(id)) { p['fill-color'] = GMAP.green; p['fill-opacity'] = 1; }
+    else if (id === 'water') p['fill-color'] = GMAP.water;
+    else if (/^waterway/.test(id) && l.type === 'line') p['line-color'] = GMAP.water;
+    else if (id === 'landuse_hospital') p['fill-color'] = GMAP.hospital;
+    else if (id === 'landuse_school') p['fill-color'] = GMAP.school;
+    else if (id === 'landuse_cemetery') p['fill-color'] = GMAP.cemetery;
+    else if (id === 'building') {
+      l.minzoom = 17; delete l.maxzoom;
+      p['fill-color'] = GMAP.bld; p['fill-outline-color'] = GMAP.bldLine;
+    }
+    else if (l['source-layer'] === 'transportation' && l.type === 'line') {
+      const cas = /casing/.test(id);
+      p['line-color'] = /rail/.test(id) ? GMAP.rail
+        : /path_pedestrian/.test(id) ? (cas ? GMAP.roadCase : GMAP.path)
+        : /motorway/.test(id) ? (cas ? GMAP.mwCase : GMAP.mw)
+        : /trunk_primary/.test(id) ? (cas ? GMAP.majorCase : GMAP.major)
+        : (cas ? GMAP.roadCase : GMAP.road);
+    }
+    else if (l.type === 'symbol' && l.layout?.['text-field'] && !/shield/.test(id)) {
+      p['text-color'] = /^highway-name/.test(id) ? GMAP.roadText : /water/.test(id) ? GMAP.waterText
+        : /^poi/.test(id) ? (p['text-color'] || GMAP.text) : GMAP.text;
+      p['text-halo-color'] = '#FFFFFF'; p['text-halo-width'] = 1.5;
+    }
+  }
+}
 async function makeBaseLayer() {
   try {
     if (!window.maplibregl || !L.maplibreGL) throw new Error('no maplibre');
     const style = await fetch(STYLE_URL).then(r => r.json());
-    // 建物は立体（3D）をやめ、平面（2D）でどの倍率でも表示する
-    style.layers = style.layers.filter(l => l.type !== 'fill-extrusion');
-    const bld = style.layers.find(l => l.id === 'building');
-    if (bld) {
-      delete bld.maxzoom;
-      bld.paint['fill-color'] = '#E6E4E0';
-      bld.paint['fill-outline-color'] = ['interpolate', ['linear'], ['zoom'], 13, 'rgba(200,196,190,0.3)', 16, '#CFCAC3'];
-    }
+    googleize(style);
     // 地名・道路名・施設名を日本語表記にする
     for (const l of style.layers) {
       const tf = l.layout && l.layout['text-field'];
