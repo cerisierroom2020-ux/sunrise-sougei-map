@@ -390,7 +390,7 @@ body.navigating .leaflet-bottom,body.has-sheet .leaflet-bottom{display:none}
     <button class="btn primary" id="btnMigrate" style="width:100%" hidden></button>
     <button class="btn" id="btnImport" style="width:100%">Googleマップのピンを取り込む</button>
     <div class="status"><span class="status-dot" id="statusDot"></span><span id="statusText"></span></div>
-    <div>アプリの版：2026-09-30 Googleマップ風の配色</div>
+    <div>アプリの版：2026-10-01 全員共有</div>
   </footer>
 </aside>
 
@@ -449,7 +449,14 @@ body.navigating .leaflet-bottom,body.has-sheet .leaflet-bottom{display:none}
    ========================================================= */
 // 全員でピンを共有するには Firebase の設定をここに貼り付けます。
 // null のままだと「この端末だけ」に保存されます（お試し用）。
-const FIREBASE_CONFIG = null;
+const FIREBASE_CONFIG = {
+  apiKey: 'AIzaSyCv7vNNHHMwBKruAljMKGCuAhR-SoIaUm4',
+  authDomain: 'sunrise-sougei-map.firebaseapp.com',
+  projectId: 'sunrise-sougei-map',
+  storageBucket: 'sunrise-sougei-map.firebasestorage.app',
+  messagingSenderId: '447886260918',
+  appId: '1:447886260918:web:76fb755f0c400c6f558417',
+};
 
 // 共有アカウント（Firebase Authentication に1人だけ登録するユーザー）。
 // Firebase のパスワードは6文字以上が必要なので、画面で入力した数字の前に PASS_PREFIX を付けてログインする。
