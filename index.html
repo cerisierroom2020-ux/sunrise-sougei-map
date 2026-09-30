@@ -90,6 +90,11 @@ button{cursor:pointer}
 .layer-btn{pointer-events:auto;width:52px;height:52px;border-radius:14px;border:3px solid #fff;box-shadow:var(--shadow);padding:0;overflow:hidden;position:relative;flex:none;background:#6d7f5a center/cover}
 .layer-btn span{position:absolute;left:0;right:0;bottom:0;font-size:10px;font-weight:700;color:#fff;background:rgba(0,0,0,.55);line-height:16px}
 
+.chips{position:absolute;z-index:1090;top:calc(var(--st) + 72px);left:12px;right:72px;display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;padding:2px}
+.chips::-webkit-scrollbar{display:none}
+.qchip{flex:none;display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border-radius:18px;border:none;background:var(--surface);color:var(--ink);box-shadow:0 1px 4px rgba(20,28,45,.2);font-weight:700;font-size:14px}
+.qchip svg{width:18px;height:18px;color:var(--route)}
+body.navigating .chips,body.picking .chips{display:none}
 .fabs{position:absolute;z-index:1050;right:12px;bottom:calc(var(--sb) + 24px);display:grid;gap:12px}
 .fab-add{background:var(--accent);color:#fff}
 
@@ -270,6 +275,13 @@ body.navigating .leaflet-bottom,body.has-sheet .leaflet-bottom{display:none}
     <button class="layer-btn" id="btnLayer" aria-label="地図の種類を切り替え"><span id="layerLabel">航空写真</span></button>
   </div>
 
+  <!-- 検索の下のショートカット（1タップでルート） -->
+  <div class="chips" id="chips">
+    <button class="qchip" id="chipWork">
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10 3h4a2 2 0 0 1 2 2v1h3a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3V5a2 2 0 0 1 2-2zm0 3h4V5h-4v1z"/></svg>職場
+    </button>
+  </div>
+
   <div class="fabs">
     <button class="round fab-add" id="btnAdd" aria-label="ピンを追加">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
@@ -390,7 +402,7 @@ body.navigating .leaflet-bottom,body.has-sheet .leaflet-bottom{display:none}
     <button class="btn primary" id="btnMigrate" style="width:100%" hidden></button>
     <button class="btn" id="btnImport" style="width:100%">Googleマップのピンを取り込む</button>
     <div class="status"><span class="status-dot" id="statusDot"></span><span id="statusText"></span></div>
-    <div>アプリの版：2026-10-01 全員共有</div>
+    <div>アプリの版：2026-10-01 職場ボタン</div>
   </footer>
 </aside>
 
@@ -846,7 +858,14 @@ function fillPinSheet(id) {
   $('#psMemo').textContent = p.memo || ''; $('#psMemo').hidden = !p.memo;
   $('#psConfirm').hidden = true;
 }
-$('#psRoute').addEventListener('click', () => { const p = Store.get(sheetPinId); if (p) planRoute(p); });
+// 「職場」ボタン：事業所（さんらいず）までのルートをすぐ出す
+$('#chipWork').addEventListener('click', () => {
+  const office = Store.pins.find(p => p.category === 'office') || Store.pins.find(p => p.name === '職場');
+  if (!office) { toast('職場（事業所）のピンが見つかりません'); return; }
+  hideResults(); closePanel();
+  planRoute(office);
+});
+$('#psRoute').addEventListener('click',() => { const p = Store.get(sheetPinId); if (p) planRoute(p); });
 $('#psAerial').addEventListener('click', () => { const p = Store.get(sheetPinId); if (p) { showAerialMini(p); openAerialFull(); } });
 $('#psEdit').addEventListener('click', () => { const p = Store.get(sheetPinId); if (p) openForm(p); });
 $('#psMove').addEventListener('click', () => {
@@ -1380,7 +1399,7 @@ function parseGeoJSON(obj) {
     if (!lat && !lng) { const c = coordsFromUrl(p.google_maps_url || p['Google Maps URL']); if (c) ({ lat, lng } = c); }
     return {
       name: loc.name || loc['Business Name'] || p.Title || p.name || loc.address || loc.Address || '',
-      address: loc.address || loc.Address || '', memo: p.Comment || p.comment || '', lat, lng, hint: '',
+      address: loc.address || loc.Address || p.address || p.Address || '', memo: p.Comment || p.comment || '', lat, lng, hint: '',
     };
   });
 }
@@ -1492,7 +1511,9 @@ $('#importFile').addEventListener('change', async e => {
   }
   importItems = items.map(it => {
     if (!it.status) it.status = 'ok';
-    if (it.status !== 'missing' && Store.pins.some(p => p.name === it.name && haversine(p, it) < 50)) it.status = 'dup';
+    // 同じ名前で近い、または「職場」ラベルが事業所とほぼ同じ場所 → 登録済みとして扱う
+    if (it.status !== 'missing' && Store.pins.some(p => (p.name === it.name && haversine(p, it) < 50) ||
+        (it.name === '職場' && p.category === 'office' && haversine(p, it) < 150))) it.status = 'dup';
     return { ...it, category: guessCat(`${it.hint} ${it.name}`), checked: it.status === 'ok' || it.status === 'guessed' };
   });
   const ok = importItems.filter(it => it.checked).length;
