@@ -390,6 +390,7 @@ body.navigating .leaflet-bottom,body.has-sheet .leaflet-bottom{display:none}
     <button class="btn primary" id="btnMigrate" style="width:100%" hidden></button>
     <button class="btn" id="btnImport" style="width:100%">Googleマップのピンを取り込む</button>
     <div class="status"><span class="status-dot" id="statusDot"></span><span id="statusText"></span></div>
+    <div>アプリの版：2026-09-30 建物2D</div>
   </footer>
 </aside>
 
@@ -643,7 +644,7 @@ let userPos = null, userMarker = null, firstFit = true, lastHold = 0;
 function startApp() {
   map = L.map('map', { zoomControl: false, tap: true, tapHold: true, maxZoom: 20 }).setView([OFFICE.lat, OFFICE.lng], 15);
   layerPhoto = tileLayer('photo');
-  makeBaseLayer().then(l => { layerStd = l; if (!isPhoto) l.addTo(map); });
+  makeBaseLayer().then(l => { layerStd = l; if (!isPhoto) { l.addTo(map); watchVector(l); } });
   setLayerBtn();
 
   // 何もない所を長押し（PCは右クリック）→ その地点を選択
@@ -679,6 +680,19 @@ async function makeBaseLayer() {
   } catch {
     return tileLayer('pale');
   }
+}
+// 地図の元データが読めない端末（通信制限・広告ブロック等）では、国土地理院の淡色地図に切り替える
+function watchVector(layer) {
+  const gl = layer.getMaplibreMap?.(); if (!gl) return;
+  let okTiles = 0, errs = 0, swapped = false;
+  gl.on('sourcedata', e => { if (e.tile) okTiles++; });
+  gl.on('error', () => {
+    if (swapped || okTiles || ++errs < 4) return;
+    swapped = true;
+    const pale = tileLayer('pale');
+    if (!isPhoto) { map.removeLayer(layer); pale.addTo(map); }
+    layerStd = pale;
+  });
 }
 function setLayerBtn() {
   // ボタンには「押すと切り替わる先」を表示
