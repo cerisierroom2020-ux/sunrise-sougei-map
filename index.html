@@ -9,6 +9,7 @@
 <meta name="robots" content="noindex,nofollow">
 <title>さんらいず送迎マップ</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700;900&display=swap">
@@ -186,7 +187,17 @@ body.picking .fabs,body.picking .aerial-mini{display:none}
 .filter{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:6px 12px;font-size:13px;font-weight:700}
 .filter[aria-pressed="true"]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
 .list{flex:1;overflow:auto;padding:4px 0}
-.panel footer{padding:10px 16px calc(var(--sb) + 12px);border-top:1px solid var(--line);font-size:12px;color:var(--muted);display:flex;gap:8px;align-items:center}
+.panel footer{padding:10px 16px calc(var(--sb) + 12px);border-top:1px solid var(--line);font-size:12px;color:var(--muted);display:grid;gap:10px}
+.panel footer .status{display:flex;gap:8px;align-items:center}
+.import-list{display:grid;gap:2px;max-height:45vh;overflow:auto}
+.import-row{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:8px 2px;border-bottom:1px solid var(--line)}
+.import-row input[type=checkbox]{width:20px;height:20px}
+.import-row b{display:block;font-size:14px;overflow-wrap:anywhere}
+.import-row small{display:block;font-size:12px;color:var(--muted);overflow-wrap:anywhere}
+.import-row small.warn{color:var(--accent);font-weight:700}
+.import-row select{border:1px solid var(--line);border-radius:8px;background:var(--surface-2);min-height:34px;padding:0 6px}
+.import-row.off{opacity:.5}
+#importFile{padding:10px;border:1px dashed var(--line);border-radius:12px;background:var(--surface-2);width:100%}
 .status-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
 .status-dot.cloud{background:var(--ok)}
 
@@ -375,8 +386,26 @@ body.navigating .leaflet-bottom,body.has-sheet .leaflet-bottom{display:none}
   </header>
   <div class="filters" id="filters"></div>
   <div class="list" id="list"></div>
-  <footer><span class="status-dot" id="statusDot"></span><span id="statusText"></span></footer>
+  <footer>
+    <button class="btn" id="btnImport" style="width:100%">Googleマップのピンを取り込む</button>
+    <div class="status"><span class="status-dot" id="statusDot"></span><span id="statusText"></span></div>
+  </footer>
 </aside>
+
+<!-- 取り込み -->
+<div class="modal" id="importModal" hidden>
+  <form id="importForm" novalidate>
+    <h2>Googleマップのピンを取り込む</h2>
+    <p class="meta">Googleマイマップ（KML・KMZ）や、Googleデータエクスポート（ZIP・JSON・CSV）のファイルを選んでください。</p>
+    <input type="file" id="importFile" accept=".kml,.kmz,.json,.geojson,.csv,.zip">
+    <div class="meta" id="importStatus" role="status"></div>
+    <div class="import-list" id="importList"></div>
+    <div class="form-actions">
+      <button type="button" class="btn" id="importCancel">閉じる</button>
+      <button type="submit" class="btn primary" id="importGo" disabled>取り込む</button>
+    </div>
+  </form>
+</div>
 
 <!-- 登録・編集フォーム -->
 <div class="modal" id="formModal" hidden>
@@ -410,6 +439,8 @@ body.navigating .leaflet-bottom,body.has-sheet .leaflet-bottom{display:none}
 <div id="toast" role="status" hidden></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@maplibre/maplibre-gl-leaflet@0.0.22/leaflet-maplibre-gl.js"></script>
 <script>
 /* =========================================================
    設定
@@ -427,8 +458,11 @@ const CATS = {
   office: { label: '事業所', glyph: '所', color: '#8B4FC7' },
   other:  { label: 'その他', glyph: '●', color: '#5B6475' },
 };
+// 通常の地図（Googleマップ風のベクター地図）。読み込めない時は国土地理院の淡色地図を使う
+const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
+const STYLE_ATTR = '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
 const TILES = {
-  std:   'https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png',
+  pale:  'https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png',
   photo: 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg',
 };
 const ATTR = '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院</a>';
@@ -471,7 +505,7 @@ const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 /* =========================================================
    データ（ピン）の保存先
    ========================================================= */
-const LS_KEY = 'sunrise_pins_v1';
+const LS_KEY = 'sunrise_pins_v2';
 const Store = {
   pins: [], mode: 'local', onChange: () => {},
   get(id) { return this.pins.find(p => p.id === id); },
@@ -497,10 +531,20 @@ const Store = {
     this.onChange();
   },
   persist() { lsSet(LS_KEY, JSON.stringify(this.pins)); },
-  save(pin) {
-    if (this.mode === 'cloud') { const { id, ...data } = pin; this.col.doc(id).set(data); return; }
-    const i = this.pins.findIndex(p => p.id === pin.id);
-    if (i >= 0) this.pins[i] = pin; else this.pins.push(pin);
+  save(pin) { this.saveMany([pin]); },
+  saveMany(list) {
+    if (this.mode === 'cloud') {
+      for (let i = 0; i < list.length; i += 400) {
+        const batch = firebase.firestore().batch();
+        list.slice(i, i + 400).forEach(({ id, ...data }) => batch.set(this.col.doc(id), data));
+        batch.commit();
+      }
+      return;
+    }
+    for (const pin of list) {
+      const i = this.pins.findIndex(p => p.id === pin.id);
+      if (i >= 0) this.pins[i] = pin; else this.pins.push(pin);
+    }
     this.persist(); this.onChange();
   },
   remove(id) {
@@ -509,11 +553,9 @@ const Store = {
     this.persist(); this.onChange();
   },
 };
+const OFFICE = { lat: 34.500916, lng: 135.413757 };
 const SAMPLE_PINS = [
-  { id: 's1', name: 'さんらいず（例）', category: 'office', lat: 35.6852, lng: 139.7528, address: '東京都千代田区（サンプル）', memo: 'サンプルのピンです。長押しで航空写真、タップで詳細が出ます。', updatedAt: 0 },
-  { id: 's2', name: 'Aくん 自宅（例）', category: 'home', lat: 35.6897, lng: 139.7440, address: '東京都千代田区（サンプル）', memo: '玄関は建物の裏側。車は向かいの路肩に停める。', updatedAt: 0 },
-  { id: 's3', name: '〇〇小学校（例）', category: 'school', lat: 35.6800, lng: 139.7430, address: '東京都千代田区（サンプル）', memo: '15:10 正門前でお迎え', updatedAt: 0 },
-  { id: 's4', name: 'Aくん母 職場（例）', category: 'work', lat: 35.6812, lng: 139.7671, address: '東京都千代田区（サンプル）', memo: '', updatedAt: 0 },
+  { id: 'office', name: 'さんらいず', category: 'office', lat: OFFICE.lat, lng: OFFICE.lng, address: '大阪府泉大津市下条町12-12', memo: '', updatedAt: 0 },
 ];
 
 /* =========================================================
@@ -552,9 +594,9 @@ const markers = new Map();
 let userPos = null, userMarker = null, firstFit = true, lastHold = 0;
 
 function startApp() {
-  map = L.map('map', { zoomControl: false, tap: true, tapHold: true }).setView([35.6852, 139.7528], 15);
-  layerStd = tileLayer('std').addTo(map);
+  map = L.map('map', { zoomControl: false, tap: true, tapHold: true, maxZoom: 20 }).setView([OFFICE.lat, OFFICE.lng], 15);
   layerPhoto = tileLayer('photo');
+  makeBaseLayer().then(l => { layerStd = l; if (!isPhoto) l.addTo(map); });
   setLayerBtn();
 
   // 何もない所を長押し（PCは右クリック）→ その地点を選択
@@ -567,6 +609,22 @@ function startApp() {
   buildCatInputs(); buildFilters();
 }
 
+async function makeBaseLayer() {
+  try {
+    if (!window.maplibregl || !L.maplibreGL) throw new Error('no maplibre');
+    const style = await fetch(STYLE_URL).then(r => r.json());
+    // 地名・道路名・施設名を日本語表記にする
+    for (const l of style.layers) {
+      const tf = l.layout && l.layout['text-field'];
+      if (tf && JSON.stringify(tf).includes('name')) {
+        l.layout['text-field'] = ['coalesce', ['get', 'name:ja'], ['get', 'name:nonlatin'], ['get', 'name']];
+      }
+    }
+    return L.maplibreGL({ style, attribution: STYLE_ATTR });
+  } catch {
+    return tileLayer('pale');
+  }
+}
 function setLayerBtn() {
   // ボタンには「押すと切り替わる先」を表示
   $('#layerLabel').textContent = isPhoto ? '地図' : '航空写真';
@@ -574,7 +632,8 @@ function setLayerBtn() {
 }
 $('#btnLayer').addEventListener('click', () => {
   isPhoto = !isPhoto;
-  if (isPhoto) { map.removeLayer(layerStd); layerPhoto.addTo(map); } else { map.removeLayer(layerPhoto); layerStd.addTo(map); }
+  if (isPhoto) { if (layerStd) map.removeLayer(layerStd); layerPhoto.addTo(map); }
+  else { map.removeLayer(layerPhoto); if (layerStd) layerStd.addTo(map); }
   setLayerBtn();
 });
 
@@ -1146,10 +1205,202 @@ async function reroute() {
   } catch { toast('ルートを再検索できませんでした'); }
 }
 
+/* =========================================================
+   Googleマップからの取り込み
+   （マイマップの KML/KMZ、データエクスポートの ZIP/JSON/CSV）
+   ========================================================= */
+let importItems = [];
+function guessCat(text) {
+  const t = text || '';
+  if (/さんらいず|事業所/.test(t)) return 'office';
+  if (/学校|小学|中学|学園|保育|幼稚園/.test(t)) return 'school';
+  if (/職場|会社|勤務|勤め|パート|仕事|店|病院/.test(t)) return 'work';
+  if (/自宅|宅|家|ホーム|実家|マンション|アパート|団地/.test(t)) return 'home';
+  return 'other';
+}
+function coordsFromUrl(u) {
+  if (!u) return null;
+  let m = u.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/) || u.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/) ||
+          u.match(/[?&](?:q|query|ll|destination)=(-?\d+\.\d+),\s*(-?\d+\.\d+)/);
+  return m ? { lat: +m[1], lng: +m[2] } : null;
+}
+function stripHtml(s) {
+  if (!s) return '';
+  return (new DOMParser().parseFromString(s.replace(/<br\s*\/?>/gi, '\n'), 'text/html').body.textContent || '').trim();
+}
+function parseKML(text) {
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  const out = [];
+  for (const pm of doc.getElementsByTagName('Placemark')) {
+    const pt = pm.getElementsByTagName('Point')[0];
+    const c = pt?.getElementsByTagName('coordinates')[0]?.textContent.trim().split(/\s+/)[0];
+    let folder = '';
+    for (let p = pm.parentElement; p; p = p.parentElement) {
+      if (p.tagName === 'Folder') { folder = [...p.children].find(n => n.tagName === 'name')?.textContent || ''; break; }
+    }
+    const [lng, lat] = c ? c.split(',').map(Number) : [];
+    out.push({
+      name: [...pm.children].find(n => n.tagName === 'name')?.textContent.trim() || '',
+      memo: stripHtml(pm.getElementsByTagName('description')[0]?.textContent),
+      address: pm.getElementsByTagName('address')[0]?.textContent.trim() || '',
+      lat, lng, hint: folder,
+    });
+  }
+  return out;
+}
+function parseGeoJSON(obj) {
+  return (obj.features || []).map(f => {
+    const p = f.properties || {}, loc = p.location || p.Location || {};
+    let [lng, lat] = f.geometry?.coordinates || [];
+    if (!lat && !lng && loc['Geo Coordinates']) { lat = +loc['Geo Coordinates'].Latitude; lng = +loc['Geo Coordinates'].Longitude; }
+    if (!lat && !lng) { const c = coordsFromUrl(p.google_maps_url || p['Google Maps URL']); if (c) ({ lat, lng } = c); }
+    return {
+      name: loc.name || loc['Business Name'] || p.Title || p.name || loc.address || loc.Address || '',
+      address: loc.address || loc.Address || '', memo: p.Comment || p.comment || '', lat, lng, hint: '',
+    };
+  });
+}
+function parseCSVText(text) {
+  const rows = []; let row = [], cur = '', q = false;
+  text = text.replace(/^﻿/, '');
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) { if (ch === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === ',') { row.push(cur); cur = ''; }
+    else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(cur); rows.push(row); row = []; cur = ''; }
+    else cur += ch;
+  }
+  if (cur || row.length) { row.push(cur); rows.push(row); }
+  return rows.filter(r => r.some(v => v.trim()));
+}
+function parseCSV(text, fileName) {
+  const rows = parseCSVText(text); if (rows.length < 2) return [];
+  const head = rows[0].map(h => h.trim().toLowerCase());
+  const col = (...names) => head.findIndex(h => names.includes(h));
+  const iName = col('title', 'name', '名前', 'タイトル', '名称'), iNote = col('note', 'メモ', 'description', '説明');
+  const iUrl = col('url'), iCom = col('comment', 'コメント'), iAddr = col('address', '住所');
+  const iLat = col('latitude', 'lat', '緯度'), iLng = col('longitude', 'lng', 'lon', '経度');
+  const listName = (fileName || '').replace(/\.csv$/i, '').split('/').pop();
+  return rows.slice(1).map(r => {
+    let lat = iLat >= 0 ? parseFloat(r[iLat]) : NaN, lng = iLng >= 0 ? parseFloat(r[iLng]) : NaN;
+    if (isNaN(lat) || isNaN(lng)) { const c = coordsFromUrl(r[iUrl]); if (c) ({ lat, lng } = c); }
+    return {
+      name: (r[iName] || '').trim(), address: (r[iAddr] || '').trim(),
+      memo: [r[iNote], r[iCom]].filter(Boolean).join('\n').trim(), lat, lng, hint: listName,
+    };
+  });
+}
+async function readImportFile(file) {
+  const name = file.name.toLowerCase();
+  if (name.endsWith('.kml')) return parseKML(await file.text());
+  if (name.endsWith('.csv')) return parseCSV(await file.text(), file.name);
+  if (name.endsWith('.json') || name.endsWith('.geojson')) return parseGeoJSON(JSON.parse(await file.text()));
+  if (name.endsWith('.kmz') || name.endsWith('.zip')) {
+    if (!window.JSZip) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js');
+    const zip = await JSZip.loadAsync(file);
+    let out = [];
+    for (const f of Object.values(zip.files)) {
+      if (f.dir) continue;
+      const n = f.name.toLowerCase();
+      if (n.endsWith('.kml')) out = out.concat(parseKML(await f.async('string')));
+      else if (n.endsWith('.csv') && /map|マップ|saved|保存/i.test(f.name)) out = out.concat(parseCSV(await f.async('string'), f.name));
+      else if (n.endsWith('.json') && /map|マップ|place|場所/i.test(f.name)) {
+        try { const j = JSON.parse(await f.async('string')); if (j.features) out = out.concat(parseGeoJSON(j)); } catch {}
+      }
+    }
+    return out;
+  }
+  throw new Error('この種類のファイルには対応していません');
+}
+async function geocode(q) {
+  if (/[都道府県市区町村]|丁目|番地?|\d+-\d+/.test(q)) {
+    try {
+      const g = await fetch('https://msearch.gsi.go.jp/address-search/AddressSearch?q=' + encodeURIComponent(q)).then(r => r.json());
+      if (g[0]) return { lat: g[0].geometry.coordinates[1], lng: g[0].geometry.coordinates[0] };
+    } catch {}
+  }
+  await new Promise(r => setTimeout(r, 1100)); // OpenStreetMap の利用ルール（1秒に1回まで）
+  try {
+    const o = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=jp&accept-language=ja&q=${encodeURIComponent(q)}`).then(r => r.json());
+    if (o[0]) return { lat: +o[0].lat, lng: +o[0].lon };
+  } catch {}
+  return null;
+}
+function renderImportList() {
+  $('#importList').innerHTML = importItems.map((it, i) => {
+    const note = it.status === 'missing' ? '<small class="warn">位置がわかりません（取り込めません）</small>'
+      : it.status === 'dup' ? '<small>すでに登録されています</small>'
+      : it.status === 'guessed' ? '<small class="warn">位置は名前・住所から推定しました。取り込み後に確認してください</small>'
+      : `<small>${esc(it.address || it.hint || '')}</small>`;
+    return `<div class="import-row${it.checked ? '' : ' off'}">
+      <input type="checkbox" data-i="${i}" ${it.checked ? 'checked' : ''} ${it.status === 'missing' ? 'disabled' : ''} aria-label="${esc(it.name)}を取り込む">
+      <div><b>${esc(it.name || '（名前なし）')}</b>${note}</div>
+      <select data-i="${i}" aria-label="種類">${Object.entries(CATS).map(([k, c]) => `<option value="${k}" ${k === it.category ? 'selected' : ''}>${c.label}</option>`).join('')}</select>
+    </div>`;
+  }).join('');
+  const n = importItems.filter(it => it.checked).length;
+  $('#importGo').disabled = !n;
+  $('#importGo').textContent = n ? `${n}件を取り込む` : '取り込む';
+}
+$('#btnImport').addEventListener('click', () => {
+  closePanel(); importItems = [];
+  $('#importFile').value = ''; $('#importStatus').textContent = ''; renderImportList();
+  $('#importModal').hidden = false;
+});
+$('#importCancel').addEventListener('click', () => { $('#importModal').hidden = true; });
+$('#importFile').addEventListener('change', async e => {
+  const file = e.target.files[0]; if (!file) return;
+  importItems = []; renderImportList();
+  $('#importStatus').textContent = 'ファイルを読んでいます…';
+  let items;
+  try { items = await readImportFile(file); }
+  catch (err) { $('#importStatus').textContent = '読み込めませんでした：' + (err.message || 'ファイルの形式を確認してください'); return; }
+  items = items.filter(it => it.name || it.address);
+  if (!items.length) { $('#importStatus').textContent = 'ピンが見つかりませんでした。別のファイルを選んでください。'; return; }
+  const valid = v => typeof v === 'number' && !isNaN(v) && v !== 0;
+  const needGeo = items.filter(it => !(valid(it.lat) && valid(it.lng)));
+  for (let k = 0; k < needGeo.length; k++) {
+    const it = needGeo[k];
+    $('#importStatus').textContent = `位置を調べています… ${k + 1} / ${needGeo.length}`;
+    const c = await geocode(it.address || it.name);
+    if (c) { it.lat = c.lat; it.lng = c.lng; it.status = 'guessed'; } else it.status = 'missing';
+  }
+  importItems = items.map(it => {
+    if (!it.status) it.status = 'ok';
+    if (it.status !== 'missing' && Store.pins.some(p => p.name === it.name && haversine(p, it) < 50)) it.status = 'dup';
+    return { ...it, category: guessCat(`${it.hint} ${it.name}`), checked: it.status === 'ok' || it.status === 'guessed' };
+  });
+  const ok = importItems.filter(it => it.checked).length;
+  $('#importStatus').textContent = `${importItems.length}件見つかりました。種類を確かめてから「取り込む」を押してください。` +
+    (importItems.length - ok ? `（${importItems.length - ok}件は対象外）` : '');
+  renderImportList();
+});
+$('#importList').addEventListener('change', e => {
+  const i = +e.target.dataset.i, it = importItems[i]; if (!it) return;
+  if (e.target.type === 'checkbox') it.checked = e.target.checked; else it.category = e.target.value;
+  renderImportList();
+});
+$('#importForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const list = importItems.filter(it => it.checked).map(it => ({
+    id: newId() + Math.random().toString(36).slice(2, 5),
+    name: it.name || it.address, category: it.category, address: it.address,
+    memo: it.status === 'guessed' ? [it.memo, '※位置は自動推定です。地図で確認してください'].filter(Boolean).join('\n') : it.memo,
+    lat: it.lat, lng: it.lng, updatedAt: Date.now(),
+  }));
+  if (!list.length) return;
+  Store.saveMany(list);
+  $('#importModal').hidden = true;
+  toast(`${list.length}件のピンを取り込みました`);
+  map.fitBounds(L.latLngBounds(Store.pins.map(p => [p.lat, p.lng])), { padding: [70, 70], maxZoom: 16 });
+});
+
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   const af = $('#aerialFull');
   if (af && !af.hidden) af.hidden = true;
+  else if (!$('#importModal').hidden) $('#importModal').hidden = true;
   else if (!$('#formModal').hidden) closeForm();
   else if (!$('#panel').hidden) closePanel();
   else if (pickCb) endPick(false);
