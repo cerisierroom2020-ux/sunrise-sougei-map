@@ -387,6 +387,7 @@ body.navigating .leaflet-bottom,body.has-sheet .leaflet-bottom{display:none}
   <div class="filters" id="filters"></div>
   <div class="list" id="list"></div>
   <footer>
+    <button class="btn primary" id="btnMigrate" style="width:100%" hidden></button>
     <button class="btn" id="btnImport" style="width:100%">Googleマップのピンを取り込む</button>
     <div class="status"><span class="status-dot" id="statusDot"></span><span id="statusText"></span></div>
   </footer>
@@ -445,11 +446,19 @@ body.navigating .leaflet-bottom,body.has-sheet .leaflet-bottom{display:none}
 /* =========================================================
    設定
    ========================================================= */
-const PASSWORD = '1001';
-
 // 全員でピンを共有するには Firebase の設定をここに貼り付けます。
 // null のままだと「この端末だけ」に保存されます（お試し用）。
 const FIREBASE_CONFIG = null;
+
+// 共有アカウント（Firebase Authentication に1人だけ登録するユーザー）。
+// Firebase のパスワードは6文字以上が必要なので、画面で入力した数字の前に PASS_PREFIX を付けてログインする。
+// 例：画面で 1001 → Firebase のパスワードは sunrise-map-1001
+const STAFF_EMAIL = 'sunrise-staff@example.com';
+const PASS_PREFIX = 'sunrise-map-';
+const PASS_LEN = 4;
+
+// Firebase 未設定（お試しモード）のときだけ使うパスワード
+const PASSWORD = '1001';
 
 const CATS = {
   home:   { label: '自宅',   glyph: '家', color: '#E8772E' },
@@ -511,41 +520,46 @@ const Store = {
   get(id) { return this.pins.find(p => p.id === id); },
   async init(onChange) {
     this.onChange = onChange;
-    if (FIREBASE_CONFIG) {
-      try {
-        await loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js');
-        await loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js');
-        firebase.initializeApp(FIREBASE_CONFIG);
-        this.col = firebase.firestore().collection('pins');
-        this.mode = 'cloud';
-        this.col.onSnapshot(snap => {
-          this.pins = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-          this.onChange();
-        }, () => toast('共有データに接続できません。通信状況を確認してください'));
-        return;
-      } catch { toast('共有データの読み込みに失敗しました。この端末のデータを表示します'); }
+    if (FIREBASE_CONFIG && window.firebase?.auth?.().currentUser) {
+      this.col = firebase.firestore().collection('pins');
+      this.mode = 'cloud';
+      let seeded = false;
+      this.col.onSnapshot(snap => {
+        this.pins = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        // 共有データが空のときだけ、事業所のピンを最初に置く
+        if (!seeded && !snap.metadata.fromCache && !snap.size) { seeded = true; this.saveMany(SAMPLE_PINS); }
+        this.onChange();
+      }, () => toast('共有データに接続できません。通信状況を確認してください'));
+      return;
     }
     const raw = lsGet(LS_KEY);
     this.pins = raw ? JSON.parse(raw) : SAMPLE_PINS.map(p => ({ ...p }));
     if (!raw) this.persist();
     this.onChange();
   },
+  // 共有モードで、この端末だけに保存されていたピン（事業所のサンプルは除く）
+  localOnlyPins() {
+    if (this.mode !== 'cloud') return [];
+    try { return JSON.parse(lsGet(LS_KEY) || '[]').filter(p => p.id !== 'office'); } catch { return []; }
+  },
   persist() { lsSet(LS_KEY, JSON.stringify(this.pins)); },
-  save(pin) { this.saveMany([pin]); },
+  save(pin) { return this.saveMany([pin]); },
   saveMany(list) {
     if (this.mode === 'cloud') {
+      const jobs = [];
       for (let i = 0; i < list.length; i += 400) {
         const batch = firebase.firestore().batch();
         list.slice(i, i + 400).forEach(({ id, ...data }) => batch.set(this.col.doc(id), data));
-        batch.commit();
+        jobs.push(batch.commit());
       }
-      return;
+      return Promise.all(jobs).then(() => true, () => { toast('保存できませんでした。通信状況を確認してください'); return false; });
     }
     for (const pin of list) {
       const i = this.pins.findIndex(p => p.id === pin.id);
       if (i >= 0) this.pins[i] = pin; else this.pins.push(pin);
     }
     this.persist(); this.onChange();
+    return Promise.resolve(true);
   },
   remove(id) {
     if (this.mode === 'cloud') { this.col.doc(id).delete(); return; }
@@ -566,23 +580,56 @@ function unlock() {
   $('#lock').hidden = true; $('#app').hidden = false;
   if (!started) { started = true; startApp(); }
 }
-try { if (sessionStorage.getItem('sunrise_unlocked') === '1') unlock(); } catch {}
+
+// 共有モード：Firebase の共有アカウントでログインした人だけがデータを読み書きできる
+let fbReady = null;
+if (FIREBASE_CONFIG) {
+  fbReady = (async () => {
+    for (const m of ['app', 'auth', 'firestore'])
+      await loadScript(`https://www.gstatic.com/firebasejs/10.12.2/firebase-${m}-compat.js`);
+    firebase.initializeApp(FIREBASE_CONFIG);
+    // タブ（アプリ）を閉じたらログアウト → 開くたびにパスワード画面から
+    await firebase.auth().setPersistence(firebase.auth.Auth.Persistence.SESSION);
+    const once = firebase.auth().onAuthStateChanged(u => { once(); if (u) unlock(); });
+  })();
+  fbReady.catch(() => { $('#pwdErr').textContent = '読み込みに失敗しました。通信状況を確認して、ページを開き直してください'; });
+} else {
+  try { if (sessionStorage.getItem('sunrise_unlocked') === '1') unlock(); } catch {}
+}
 if (!started) setTimeout(() => $('#pwd').focus(), 100);
+
 $('#pwd').addEventListener('input', e => {
-  e.target.value = e.target.value.replace(/\D/g, '').slice(0, 4);
+  e.target.value = e.target.value.replace(/\D/g, '').slice(0, PASS_LEN);
   $('#pwdErr').textContent = '';
-  if (e.target.value.length === 4) checkPwd();
+  if (e.target.value.length === PASS_LEN) checkPwd();
 });
 $('#lockForm').addEventListener('submit', e => { e.preventDefault(); checkPwd(); });
-function checkPwd() {
-  const inp = $('#pwd');
-  if (inp.value === PASSWORD) {
+function pwdFail(msg) {
+  $('#pwdErr').textContent = msg;
+  const card = $('.lock-card'); card.classList.remove('shake'); void card.offsetWidth; card.classList.add('shake');
+  $('#pwd').value = '';
+}
+let checking = false;
+async function checkPwd() {
+  const inp = $('#pwd'), v = inp.value;
+  if (!v || checking) return;
+  if (!FIREBASE_CONFIG) {
+    if (v !== PASSWORD) return pwdFail('パスワードが違います');
     try { sessionStorage.setItem('sunrise_unlocked', '1'); } catch {}
-    inp.blur(); unlock();
-  } else {
-    $('#pwdErr').textContent = 'パスワードが違います';
-    const card = $('.lock-card'); card.classList.remove('shake'); void card.offsetWidth; card.classList.add('shake');
-    inp.value = '';
+    inp.blur(); unlock(); return;
+  }
+  checking = true; inp.disabled = true; $('#pwdErr').textContent = '確認しています…';
+  try {
+    await fbReady;
+    await firebase.auth().signInWithEmailAndPassword(STAFF_EMAIL, PASS_PREFIX + v);
+    $('#pwdErr').textContent = ''; unlock();
+  } catch (err) {
+    const c = err?.code || '';
+    pwdFail(c.includes('too-many') ? '何度も間違えたため、一時的に入れなくなっています。しばらく待ってからお試しください'
+      : c.includes('network') ? '通信できません。電波の良い所でお試しください'
+      : 'パスワードが違います');
+  } finally {
+    checking = false; inp.disabled = false; if (!started) inp.focus();
   }
 }
 
@@ -922,7 +969,21 @@ function renderList() {
   const cloud = Store.mode === 'cloud';
   $('#statusDot').className = 'status-dot' + (cloud ? ' cloud' : '');
   $('#statusText').textContent = cloud ? `保存先：共有（全員に表示）・${Store.pins.length}件` : `保存先：この端末のみ（お試しモード）・${Store.pins.length}件`;
+  const local = Store.localOnlyPins();
+  $('#btnMigrate').hidden = !local.length;
+  $('#btnMigrate').textContent = `この端末だけにあるピン${local.length}件を共有する`;
 }
+$('#btnMigrate').addEventListener('click', async () => {
+  const local = Store.localOnlyPins();
+  const add = local.filter(l => !Store.pins.some(p => p.name === l.name && haversine(p, l) < 50));
+  $('#btnMigrate').disabled = true;
+  const ok = await Store.saveMany(add);
+  $('#btnMigrate').disabled = false;
+  if (!ok) return;
+  lsSet(LS_KEY, '[]');
+  toast(`${add.length}件を共有しました`);
+  renderList();
+});
 function openPanel() { renderList(); $('#panel').hidden = false; $('#scrim').hidden = false; hideResults(); }
 function closePanel() { $('#panel').hidden = true; $('#scrim').hidden = true; }
 $('#btnList').addEventListener('click', openPanel);
