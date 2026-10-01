@@ -142,6 +142,9 @@ body.navigating .me-arrow{display:block}
 .rs-peek small{font-size:13px;font-weight:700;color:var(--muted)}
 .beginner-mark{width:22px;height:24px;flex:none}
 body.far .pin-label{display:none}
+body.routing .pin:not(.route-end):not(.draft-pin),body.navigating .pin:not(.route-end){display:none}
+body.routing .topbar,body.routing .chips,body.routing #btnAdd{display:none}
+.sheet .sheet-head,.rs-peek{touch-action:none}
 #lock.checking .lock-card > :not(.sun):not(h1):not(#lockMsg){display:none}
 #lockMsg{margin:0;color:#B9C1D0;font-size:14px}
 .sheet-head{display:flex;align-items:flex-start;gap:8px}
@@ -472,7 +475,7 @@ body.navigating .maplibregl-ctrl-bottom-right,body.has-sheet .maplibregl-ctrl-bo
     <button class="btn primary" id="btnMigrate" style="width:100%" hidden></button>
     <button class="btn" id="btnImport" style="width:100%">Googleマップのピンを取り込む</button>
     <div class="status"><span class="status-dot" id="statusDot"></span><span id="statusText"></span></div>
-    <div>アプリの版：2026-10-02 初心者ルート</div>
+    <div>アプリの版：<span id="appVer"></span></div>
   </footer>
 </aside>
 
@@ -551,9 +554,22 @@ const LINK_KEY = (location.hash.slice(1).match(/^[\w-]{4,64}$/) || [])[0] || nul
 // Firebase 未設定（お試しモード）のときだけ使うパスワード
 const PASSWORD = '1001';
 
+// アプリの版。公開のたびに変える。開いた時にサーバーの版と違えば、1回だけ読み込み直す
+const APP_VERSION = '2026-10-02 ルート表示の改善';
+(async () => {
+  try {
+    const html = await fetch(location.pathname + '?v=' + Date.now(), { cache: 'no-store' }).then(r => r.text());
+    const latest = (html.match(/const APP_VERSION = '([^']+)'/) || [])[1];
+    if (latest && latest !== APP_VERSION && sessionStorage.getItem('sunrise_reloaded') !== latest) {
+      sessionStorage.setItem('sunrise_reloaded', latest);
+      location.reload();
+    }
+  } catch {}
+})();
+
 const CATS = {
   home:   { label: '自宅',   glyph: '家', color: '#E8772E' },
-  school: { label: '学校・園', glyph: '学', color: '#2F6FDB' },
+  school: { label: '学校・園', glyph: '園', color: '#2F6FDB' },
   work:   { label: '職場',   glyph: '職', color: '#2E9E6B' },
   office: { label: '事業所', glyph: '所', color: '#8B4FC7' },
   other:  { label: 'その他', glyph: '●', color: '#5B6475' },
@@ -923,10 +939,21 @@ function onPinsChanged() {
     markers.set(p.id, m);
   }
   if (firstFit && Store.pins.length) { firstFit = false; fitPins(); }
+  markRouteEnds();
+  fixEnCategory();
   if (!$('#panel').hidden) renderList();
   if (!$('#pinSheet').hidden && sheetPinId) {
     if (Store.get(sheetPinId)) fillPinSheet(sheetPinId); else closeSheets();
   }
+}
+let enFixed = false;
+const EN_RE = /保育|幼稚園|こども園|園(\s|$)/;
+function fixEnCategory() {
+  if (enFixed) return;
+  const fix = Store.pins.filter(p => p.category === 'other' && EN_RE.test((p.name || '').trim()));
+  if (!fix.length) return;
+  enFixed = true;
+  Store.saveMany(fix.map(p => ({ ...p, category: 'school', updatedAt: Date.now() })));
 }
 function fitPins() {
   const ps = Store.pins; if (!ps.length) return;
@@ -1010,49 +1037,83 @@ const sheetRO = new ResizeObserver(() => {
 });
 ['#pinSheet', '#placeSheet', '#routeSheet'].forEach(s => sheetRO.observe($(s)));
 function closeSheets() {
-  ['#pinSheet', '#placeSheet', '#routeSheet'].forEach(s => ($(s).hidden = true));
+  ['#pinSheet', '#placeSheet', '#routeSheet'].forEach(s => { const el = $(s); el.hidden = true; el.style.height = ''; });
   document.body.classList.remove('has-sheet'); setSheetH(0);
-  if (!navActive) clearRoute();
+  if (!navActive) { clearRoute(); setRouting(false); }
   clearDraft();
   sheetPinId = null;
 }
 function showSheet(sel) {
-  if (sel !== '#routeSheet') $(sel).classList.remove('peek');
-  $(sel).hidden = false; document.body.classList.add('has-sheet');
+  const el = $(sel);
+  if (sel !== '#routeSheet') el.classList.remove('peek');
+  el.style.height = '';
+  el.hidden = false; document.body.classList.add('has-sheet');
 }
 document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', closeSheets));
 
-/* ---------- 下の画面を指で上下に動かす ----------
-   上へ：全部ひらく／下へ：小さくたたむ（たたんだ状態でさらに下へ：閉じる。ルート画面はたたんだまま）／タップ：切り替え */
-function setPeek(sheet, on) {
-  sheet.classList.toggle('peek', on);
+/* ---------- 下の画面を指で上下に動かす（Googleマップと同じく好きな高さで止まる） ----------
+   いちばん下まで下げると小さくたたむ（ピンの画面はさらに下げると閉じる）／つまみをタップ：たたむ⇔半分ひらく */
+const PEEK_LIMIT = 175;
+function refitAfterSheet(sheet) {
   if (sheet.id === 'routeSheet' && Array.isArray(routeSets[routeMode]))
     requestAnimationFrame(() => fitRoutes(routeSets[routeMode]));
 }
-document.querySelectorAll('.sheet .grab-zone').forEach(zone => {
-  const sheet = zone.closest('.sheet');
-  let y0 = null, dy = 0;
-  zone.addEventListener('pointerdown', e => {
-    if (e.target.closest('button, a, select, input')) return;
-    y0 = e.clientY; dy = 0; sheet.classList.add('dragging');
+function setPeek(sheet, on) {
+  sheet.style.height = '';
+  sheet.classList.toggle('peek', on);
+  refitAfterSheet(sheet);
+}
+document.querySelectorAll('.sheet').forEach(sheet => {
+  let y0 = null, dy = 0, h0 = 0, wasPeek = false, zone = null;
+  const maxH = () => Math.round(innerHeight * 0.88);
+  sheet.addEventListener('pointerdown', e => {
+    // つまみの周り・見出しの部分だけでつかめる（ボタンや入力欄は除く）
+    zone = e.target.closest('.grab-zone, .sheet-head, .rs-peek');
+    if (!zone || e.target.closest('button, a, select, input, textarea, option')) { zone = null; return; }
+    y0 = e.clientY; dy = 0; h0 = sheet.offsetHeight; wasPeek = sheet.classList.contains('peek');
+    sheet.classList.add('dragging');
     try { zone.setPointerCapture(e.pointerId); } catch {}
   });
-  zone.addEventListener('pointermove', e => {
+  sheet.addEventListener('pointermove', e => {
     if (y0 == null) return;
     dy = e.clientY - y0;
-    sheet.style.transform = `translateY(${Math.max(dy, -30)}px)`;
+    if (Math.abs(dy) < 6) return;
+    if (sheet.classList.contains('peek')) sheet.classList.remove('peek');   // 中身を出してから高さを変える
+    sheet.style.height = Math.max(70, Math.min(maxH(), h0 - dy)) + 'px';
   });
   const end = () => {
     if (y0 == null) return;
-    y0 = null; sheet.classList.remove('dragging'); sheet.style.transform = '';
-    const peek = sheet.classList.contains('peek');
-    if (Math.abs(dy) < 6) setPeek(sheet, !peek);
-    else if (dy > 40) { if (!peek) setPeek(sheet, true); else if (sheet.id !== 'routeSheet') closeSheets(); }
-    else if (dy < -25) setPeek(sheet, false);
+    y0 = null; sheet.classList.remove('dragging');
+    if (Math.abs(dy) < 6) {                       // タップ：たたむ⇔半分
+      if (wasPeek) { sheet.classList.remove('peek'); sheet.style.height = Math.round(innerHeight * 0.55) + 'px'; refitAfterSheet(sheet); }
+      else setPeek(sheet, true);
+      return;
+    }
+    const h = sheet.offsetHeight;
+    if (h < PEEK_LIMIT) {
+      if (wasPeek && dy > 40 && sheet.id !== 'routeSheet') closeSheets();
+      else setPeek(sheet, true);
+    } else refitAfterSheet(sheet);              // 指を離した高さのまま止める
   };
-  zone.addEventListener('pointerup', end);
-  zone.addEventListener('pointercancel', end);
+  sheet.addEventListener('pointerup', end);
+  sheet.addEventListener('pointercancel', end);
 });
+
+/* ---------- ルートを出している間：ほかのピンと検索欄を隠して地図を広く ---------- */
+function setRouting(on) {
+  document.body.classList.toggle('routing', on);
+  markRouteEnds();
+}
+let routeEndMarker = null;
+function markRouteEnds() {
+  if (routeEndMarker) { routeEndMarker.remove(); routeEndMarker = null; }
+  if (document.body.classList.contains('routing') && routeDest && !routeDest.id) {
+    routeEndMarker = makePinMarker({ name: routeDest.name, category: 'other', lat: routeDest.lat, lng: routeDest.lng }, 'draft-pin route-end').addTo(map);
+  }
+  const on = document.body.classList.contains('routing');
+  const ids = new Set(on ? [routeDest?.id, routeOrigin?.id].filter(Boolean) : []);
+  markers.forEach((m, id) => m.getElement().classList.toggle('route-end', ids.has(id)));
+}
 
 /* ---------- ピン詳細 ---------- */
 let sheetPinId = null;
@@ -1293,7 +1354,7 @@ $('#btnMigrate').addEventListener('click', async () => {
   toast(`${add.length}件を共有しました`);
   renderList();
 });
-function openPanel() { renderList(); $('#panel').hidden = false; $('#scrim').hidden = false; hideResults(); }
+function openPanel() { $('#appVer').textContent = APP_VERSION; renderList(); $('#panel').hidden = false; $('#scrim').hidden = false; hideResults(); }
 function closePanel() { $('#panel').hidden = true; $('#scrim').hidden = true; }
 $('#btnList').addEventListener('click', openPanel);
 $('#panelClose').addEventListener('click', closePanel);
@@ -1409,12 +1470,13 @@ function planRoute(dest) {
   $('#rsDest').textContent = d.name;
   $('#routeSheet').classList.add('peek');
   showSheet('#routeSheet');
+  setRouting(true);
   calcRoutes();
 }
 function currentOrigin() {
   const v = $('#rsOrigin').value;
   if (v === HERE) return userPos ? { ...userPos, name: '現在地', here: true } : null;
-  const p = Store.get(v); return p ? { lat: p.lat, lng: p.lng, name: p.name } : null;
+  const p = Store.get(v); return p ? { lat: p.lat, lng: p.lng, name: p.name, id: p.id } : null;
 }
 $('#rsOrigin').addEventListener('change', calcRoutes);
 
@@ -1478,7 +1540,7 @@ async function calcRoutes() {
   routeSets = {}; route = null; selIdx = 0; clearRoute();
   $('#rsGmaps').href = gmapsUrl(o && !o.here ? o : null, d);
   if (!o) { renderRouteSheet('現在地を取得できません。出発地を選ぶか、位置情報をオンにしてください。'); return; }
-  routeOrigin = o; renderRouteSheet();
+  routeOrigin = o; markRouteEnds(); renderRouteSheet();
   await Promise.all(Object.keys(MODES).map(m => fetchMode(m, o, d, req)));
 }
 async function fetchMode(m, o, d, req) {
@@ -1599,7 +1661,7 @@ function fitRoutes(set) {
   const all = set.flatMap(r => r.coords), lngs = all.map(c => c[0]), lats = all.map(c => c[1]);
   const wide = innerWidth >= 760, sheetH = wide ? 0 : $('#routeSheet').offsetHeight;
   map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], {
-    padding: { top: 130, bottom: sheetH + 30, left: wide ? 440 : 40, right: 40 }, bearing: 0, pitch: 0, maxZoom: 17,
+    padding: { top: 50, bottom: sheetH + 24, left: wide ? 440 : 36, right: 70 }, bearing: 0, pitch: 0, maxZoom: 17,
   });
 }
 
@@ -1671,6 +1733,7 @@ function navCamera(duration = 900) {
 }
 function endNav(msg) {
   navActive = false;
+  setRouting(false);
   document.body.classList.remove('navigating');
   $('#navTop').hidden = true; $('#navThen').hidden = true; $('#navBottom').hidden = true; $('#navSide').hidden = true; $('#navRecenter').hidden = true;
   clearRoute(); route = null;
