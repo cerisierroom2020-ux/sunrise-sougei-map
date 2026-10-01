@@ -130,6 +130,20 @@ body.navigating .me-arrow{display:block}
 @keyframes up{from{transform:translateY(30px);opacity:.4}}
 @media (min-width:760px){.sheet{left:12px;right:auto;width:400px;bottom:12px;border-radius:20px;max-height:calc(100% - 100px)}}
 .grab{width:40px;height:5px;border-radius:3px;background:var(--line);justify-self:center}
+.grab-zone{margin:-8px -16px 0;padding:10px 16px 6px;display:grid;gap:8px;touch-action:none;cursor:grab;-webkit-user-select:none;user-select:none}
+.grab-zone .grab{width:44px;height:5px}
+.sheet.dragging{transition:none!important;animation:none}
+.sheet{transition:transform .2s ease-out}
+.sheet.peek .full-only{display:none!important}
+.sheet:not(.peek) .peek-only{display:none!important}
+.rs-peek{display:flex;align-items:center;gap:10px;font-size:20px;font-weight:900;font-variant-numeric:tabular-nums}
+.rs-peek > span{flex:1;min-width:0;display:flex;align-items:center;gap:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rs-peek svg{width:24px;height:24px;flex:none}
+.rs-peek small{font-size:13px;font-weight:700;color:var(--muted)}
+.beginner-mark{width:22px;height:24px;flex:none}
+body.far .pin-label{display:none}
+#lock.checking .lock-card > :not(.sun):not(h1):not(#lockMsg){display:none}
+#lockMsg{margin:0;color:#B9C1D0;font-size:14px}
 .sheet-head{display:flex;align-items:flex-start;gap:8px}
 .sheet-head > div{flex:1;min-width:0;display:grid;gap:4px}
 .sheet h2{margin:0;font-size:20px;font-weight:900;text-wrap:balance;overflow-wrap:anywhere}
@@ -276,7 +290,7 @@ body.navigating .maplibregl-ctrl-bottom-right,body.has-sheet .maplibregl-ctrl-bo
 <body>
 
 <!-- ============ パスワード画面 ============ -->
-<div id="lock">
+<div id="lock" class="checking">
   <form class="lock-card" id="lockForm" autocomplete="off">
     <svg class="sun" viewBox="0 0 88 48" aria-hidden="true">
       <g stroke="#E8772E" stroke-width="4" stroke-linecap="round">
@@ -287,6 +301,7 @@ body.navigating .maplibregl-ctrl-bottom-right,body.has-sheet .maplibregl-ctrl-bo
       <line x1="2" y1="45" x2="86" y2="45" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
     </svg>
     <h1>さんらいず 送迎マップ</h1>
+    <p id="lockMsg">開いています…</p>
     <p>職員専用です。この端末で最初の1回だけ、パスワードを入力してください。</p>
     <label for="pwd" style="position:absolute;left:-9999px">パスワード</label>
     <input id="pwd" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" placeholder="····">
@@ -305,7 +320,7 @@ body.navigating .maplibregl-ctrl-bottom-right,body.has-sheet .maplibregl-ctrl-bo
         <button type="button" class="icon-btn" id="btnList" aria-label="登録した場所の一覧">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
         </button>
-        <input id="q" type="search" placeholder="名前・住所・学校名で検索" enterkeyhint="search" autocomplete="off">
+        <input id="q" type="search" placeholder="名前・住所・学校名で検索" enterkeyhint="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" name="q-nohistory">
         <button type="submit" class="icon-btn" aria-label="検索">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
         </button>
@@ -342,7 +357,7 @@ body.navigating .maplibregl-ctrl-bottom-right,body.has-sheet .maplibregl-ctrl-bo
 
   <!-- ピン詳細 -->
   <section class="sheet" id="pinSheet" hidden aria-label="ピンの詳細">
-    <div class="grab"></div>
+    <div class="grab-zone" title="上下に動かせます"><div class="grab"></div></div>
     <div class="sheet-head">
       <div>
         <span class="chip" id="psCat"></span>
@@ -352,7 +367,7 @@ body.navigating .maplibregl-ctrl-bottom-right,body.has-sheet .maplibregl-ctrl-bo
       </div>
       <button class="icon-btn" data-close aria-label="閉じる"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </div>
-    <div class="memo-box">
+    <div class="memo-box full-only">
       <label for="psMemo">メモ</label>
       <textarea id="psMemo" maxlength="600" rows="2" placeholder="送迎時の注意などを書けます（例：玄関は裏側／15:10 正門でお迎え）"></textarea>
       <div class="actions" id="psMemoActions" hidden>
@@ -363,7 +378,7 @@ body.navigating .maplibregl-ctrl-bottom-right,body.has-sheet .maplibregl-ctrl-bo
       <button class="btn blue" id="psRoute"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 4 20l8-4 8 4z"/></svg>ここへ行く</button>
       <button class="btn" id="psAerial">航空写真</button>
     </div>
-    <div class="actions">
+    <div class="actions full-only">
       <button class="btn ghost" id="psEdit">編集</button>
       <button class="btn ghost" id="psMove">位置を修正</button>
       <button class="btn ghost" id="psDelete" style="color:var(--danger)">削除</button>
@@ -376,7 +391,7 @@ body.navigating .maplibregl-ctrl-bottom-right,body.has-sheet .maplibregl-ctrl-bo
 
   <!-- 未登録の地点 -->
   <section class="sheet" id="placeSheet" hidden aria-label="選択した地点">
-    <div class="grab"></div>
+    <div class="grab-zone" title="上下に動かせます"><div class="grab"></div></div>
     <div class="sheet-head">
       <div>
         <h2 id="plTitle">選択した地点</h2>
@@ -393,8 +408,10 @@ body.navigating .maplibregl-ctrl-bottom-right,body.has-sheet .maplibregl-ctrl-bo
 
   <!-- ルート -->
   <section class="sheet" id="routeSheet" hidden aria-label="ルート">
-    <div class="grab"></div>
-    <div class="sheet-head">
+    <div class="grab-zone" title="上下に動かせます"><div class="grab"></div>
+      <div class="rs-peek peek-only"><span id="rsPeek"></span><button class="icon-btn" data-close aria-label="閉じる"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    </div>
+    <div class="sheet-head full-only">
       <div class="route-grid">
         <label for="rsOrigin">出発</label>
         <select id="rsOrigin"></select>
@@ -403,16 +420,16 @@ body.navigating .maplibregl-ctrl-bottom-right,body.has-sheet .maplibregl-ctrl-bo
       </div>
       <button class="icon-btn" data-close aria-label="閉じる"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </div>
-    <div class="modes" id="rsModes" role="tablist" aria-label="交通手段"></div>
-    <label class="opt" id="rsTollWrap"><input type="checkbox" id="rsNoToll"> 有料道路を使わない</label>
-    <div class="summary" id="rsSummary"></div>
-    <div class="route-opts" id="rsOpts"></div>
+    <div class="modes full-only" id="rsModes" role="tablist" aria-label="交通手段"></div>
+    <label class="opt full-only" id="rsTollWrap"><input type="checkbox" id="rsNoToll"> 有料道路を使わない</label>
+    <div class="summary full-only" id="rsSummary"></div>
+    <div class="route-opts full-only" id="rsOpts"></div>
     <div class="actions">
       <button class="btn go" id="rsStart"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 4 20l8-4 8 4z"/></svg>開始</button>
       <a class="btn" id="rsGmaps" href="#" target="_blank" rel="noopener">Googleマップでナビ</a>
     </div>
-    <p class="note">所要時間は、交差点や右左折の待ち時間を見込んだ目安です。いまの渋滞は反映されないため、混み具合は「Googleマップでナビ」で確認できます。</p>
-    <details class="steps" id="rsStepsWrap"><summary>曲がる場所の一覧</summary><ol id="rsSteps"></ol></details>
+    <p class="note full-only">所要時間は、交差点や右左折の待ち時間を見込んだ目安です。いまの渋滞は反映されないため、混み具合は「Googleマップでナビ」で確認できます。</p>
+    <details class="steps full-only" id="rsStepsWrap"><summary>曲がる場所の一覧</summary><ol id="rsSteps"></ol></details>
   </section>
 
   <!-- ナビ中 -->
@@ -455,7 +472,7 @@ body.navigating .maplibregl-ctrl-bottom-right,body.has-sheet .maplibregl-ctrl-bo
     <button class="btn primary" id="btnMigrate" style="width:100%" hidden></button>
     <button class="btn" id="btnImport" style="width:100%">Googleマップのピンを取り込む</button>
     <div class="status"><span class="status-dot" id="statusDot"></span><span id="statusText"></span></div>
-    <div>アプリの版：2026-10-02 ナビ強化</div>
+    <div>アプリの版：2026-10-02 初心者ルート</div>
   </footer>
 </aside>
 
@@ -528,6 +545,8 @@ const FIREBASE_CONFIG = {
 const STAFF_EMAIL = 'sunrise-staff@example.com';
 const PASS_PREFIX = 'sunrise-map-';
 const PASS_LEN = 4;
+// 職員用リンクの「#」の後ろが鍵（例：…/sunrise-sougei-map/#1001）。ページ自体には鍵を書かない
+const LINK_KEY = (location.hash.slice(1).match(/^[\w-]{4,64}$/) || [])[0] || null;
 
 // Firebase 未設定（お試しモード）のときだけ使うパスワード
 const PASSWORD = '1001';
@@ -660,15 +679,32 @@ if (FIREBASE_CONFIG) {
     for (const m of ['app', 'auth', 'firestore'])
       await loadScript(`https://www.gstatic.com/firebasejs/10.12.2/firebase-${m}-compat.js`);
     firebase.initializeApp(FIREBASE_CONFIG);
-    // 一度ログインした端末は覚えておく → 次からパスワード入力は不要
+    // 一度ログインした端末は覚えておく
     await firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL);
-    const once = firebase.auth().onAuthStateChanged(u => { once(); if (u) unlock(); });
+    const user = await new Promise(res => { const once = firebase.auth().onAuthStateChanged(u => { once(); res(u); }); });
+    if (user) return unlock();
+    // 職員用リンク（…/#鍵）から開いた時は、パスワード入力なしでそのまま開く
+    if (LINK_KEY) {
+      try { await firebase.auth().signInWithEmailAndPassword(STAFF_EMAIL, PASS_PREFIX + LINK_KEY); return unlock(); }
+      catch (err) {
+        return showLockForm(String(err?.code || '').includes('network')
+          ? '通信できません。電波の良い所で開き直してください'
+          : 'このリンクでは開けませんでした。職員用の新しいリンクを確認してください');
+      }
+    }
+    showLockForm();
   })();
-  fbReady.catch(() => { $('#pwdErr').textContent = '読み込みに失敗しました。通信状況を確認して、ページを開き直してください'; });
+  fbReady.catch(() => showLockForm('読み込みに失敗しました。通信状況を確認して、ページを開き直してください'));
 } else {
   try { if (sessionStorage.getItem('sunrise_unlocked') === '1') unlock(); } catch {}
+  if (!started) showLockForm();
 }
-if (!started) setTimeout(() => $('#pwd').focus(), 100);
+// リンクから開けなかった時だけ、パスワード画面を出す
+function showLockForm(msg) {
+  $('#lock').classList.remove('checking');
+  if (msg) $('#pwdErr').textContent = msg;
+  setTimeout(() => $('#pwd').focus(), 100);
+}
 
 $('#pwd').addEventListener('input', e => {
   e.target.value = e.target.value.replace(/\D/g, '').slice(0, PASS_LEN);
@@ -742,6 +778,8 @@ async function startApp() {
   });
   map.on('dragstart', () => { if (navActive && follow) { follow = false; $('#navRecenter').hidden = false; } });
   map.on('rotate', updateCompass);
+  const farCheck = () => document.body.classList.toggle('far', map.getZoom() < 14);
+  map.on('zoom', farCheck); farCheck();
   map.on('pitch', updateCompass);
   map.on('click', 'route-alt', e => { if (!navActive) selectRoute(e.features[0].properties.idx, false); });
   map.on('mouseenter', 'route-alt', () => (map.getCanvas().style.cursor = 'pointer'));
@@ -978,8 +1016,43 @@ function closeSheets() {
   clearDraft();
   sheetPinId = null;
 }
-function showSheet(sel) { $(sel).hidden = false; document.body.classList.add('has-sheet'); }
+function showSheet(sel) {
+  if (sel !== '#routeSheet') $(sel).classList.remove('peek');
+  $(sel).hidden = false; document.body.classList.add('has-sheet');
+}
 document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', closeSheets));
+
+/* ---------- 下の画面を指で上下に動かす ----------
+   上へ：全部ひらく／下へ：小さくたたむ（たたんだ状態でさらに下へ：閉じる。ルート画面はたたんだまま）／タップ：切り替え */
+function setPeek(sheet, on) {
+  sheet.classList.toggle('peek', on);
+  if (sheet.id === 'routeSheet' && Array.isArray(routeSets[routeMode]))
+    requestAnimationFrame(() => fitRoutes(routeSets[routeMode]));
+}
+document.querySelectorAll('.sheet .grab-zone').forEach(zone => {
+  const sheet = zone.closest('.sheet');
+  let y0 = null, dy = 0;
+  zone.addEventListener('pointerdown', e => {
+    if (e.target.closest('button, a, select, input')) return;
+    y0 = e.clientY; dy = 0; sheet.classList.add('dragging');
+    try { zone.setPointerCapture(e.pointerId); } catch {}
+  });
+  zone.addEventListener('pointermove', e => {
+    if (y0 == null) return;
+    dy = e.clientY - y0;
+    sheet.style.transform = `translateY(${Math.max(dy, -30)}px)`;
+  });
+  const end = () => {
+    if (y0 == null) return;
+    y0 = null; sheet.classList.remove('dragging'); sheet.style.transform = '';
+    const peek = sheet.classList.contains('peek');
+    if (Math.abs(dy) < 6) setPeek(sheet, !peek);
+    else if (dy > 40) { if (!peek) setPeek(sheet, true); else if (sheet.id !== 'routeSheet') closeSheets(); }
+    else if (dy < -25) setPeek(sheet, false);
+  };
+  zone.addEventListener('pointerup', end);
+  zone.addEventListener('pointercancel', end);
+});
 
 /* ---------- ピン詳細 ---------- */
 let sheetPinId = null;
@@ -1168,12 +1241,14 @@ $('#searchForm').addEventListener('submit', async e => {
 });
 $('#results').addEventListener('click', e => {
   const b = e.target.closest('.result'); if (!b) return;
+  const remote = $('#results')._remote;
   $('#q').blur(); hideResults();
+  $('#q').value = ''; $('#results')._remote = []; $('#results').innerHTML = '';
   if (b.dataset.pin) {
     const p = Store.get(b.dataset.pin); if (!p) return;
     flyToLL(p); openPinSheet(p.id);
   } else {
-    const r = $('#results')._remote[+b.dataset.remote]; if (!r) return;
+    const r = remote[+b.dataset.remote]; if (!r) return;
     map.flyTo({ center: [r.lng, r.lat], zoom: 17 });
     showPlace({ lat: r.lat, lng: r.lng }, r.title, r.sub === '住所' ? r.title : r.sub);
   }
@@ -1301,8 +1376,11 @@ $('#btnAdd').addEventListener('click', () => {
    ========================================================= */
 const VALHALLA = 'https://valhalla1.openstreetmap.de/route?json=';
 const MODES = {
-  auto: { label: '車', g: 'driving',
+  auto: { label: '車', g: 'driving', alts: 2,
     svg: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 11.5 6.6 6.8A2 2 0 0 1 8.5 5.5h7a2 2 0 0 1 1.9 1.3L19 11.5V18a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1v-1H8v1a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1zm2.3-1h9.4l-1.1-3.2a.5.5 0 0 0-.5-.3H8.9a.5.5 0 0 0-.5.3zM7.5 15a1.4 1.4 0 1 0 0-2.8 1.4 1.4 0 0 0 0 2.8zm9 0a1.4 1.4 0 1 0 0-2.8 1.4 1.4 0 0 0 0 2.8z"/></svg>' },
+  // 初心者：車と同じ道路データで、細い道・曲がる回数の多い道をなるべく避け、所要時間に5分の余裕を足す
+  beginner: { label: '初心者', g: 'driving', costing: 'auto', buffer: 300, alts: 1,
+    svg: '<svg class="beginner-mark" viewBox="0 0 22 24" aria-hidden="true"><path d="M1 1 11 7v16L1 17z" fill="#F4C20D" stroke="#fff"/><path d="M21 1 11 7v16l10-6z" fill="#1E8E3E" stroke="#fff"/></svg>' },
   bicycle: { label: '自転車', g: 'bicycling',
     svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5.5" cy="16" r="3.5"/><circle cx="18.5" cy="16" r="3.5"/><path d="M5.5 16 9 9h6.5l3 7M12 16 9 9M15.5 9 14 6h-2.5"/></svg>' },
   pedestrian: { label: '徒歩', g: 'walking',
@@ -1329,6 +1407,7 @@ function planRoute(dest) {
     others.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
   sel.value = userPos ? HERE : (offices[0] || others[0] || { id: HERE }).id;
   $('#rsDest').textContent = d.name;
+  $('#routeSheet').classList.add('peek');
   showSheet('#routeSheet');
   calcRoutes();
 }
@@ -1376,11 +1455,17 @@ function normTrip(t) {
 async function valhalla(o, d, mode, alternates = 0) {
   const from = { lat: o.lat, lon: o.lng };
   if (o.heading != null) { from.heading = Math.round(o.heading); from.heading_tolerance = 60; }
+  const costing = MODES[mode].costing || mode;
   const body = {
-    locations: [from, { lat: d.lat, lon: d.lng }], costing: mode, alternates,
+    locations: [from, { lat: d.lat, lon: d.lng }], costing, alternates,
     directions_options: { language: 'ja-JP', units: 'kilometers' },
   };
-  if (mode === 'auto') body.costing_options = { auto: { use_tolls: avoidTolls ? 0 : 0.5 } };
+  if (costing === 'auto') {
+    const a = { use_tolls: avoidTolls ? 0 : 0.5 };
+    // 初心者向け：曲がる回数を減らし、生活道路・私道・路地・農道をなるべく使わない
+    if (mode === 'beginner') Object.assign(a, { maneuver_penalty: 45, use_living_streets: 0, use_tracks: 0, service_penalty: 600, service_factor: 8, destination_only_penalty: 600 });
+    body.costing_options = { auto: a };
+  }
   const r = await fetch(VALHALLA + encodeURIComponent(JSON.stringify(body)));
   const j = await r.json();
   if (!j.trip) throw new Error(j.error || 'no route');
@@ -1397,7 +1482,10 @@ async function calcRoutes() {
   await Promise.all(Object.keys(MODES).map(m => fetchMode(m, o, d, req)));
 }
 async function fetchMode(m, o, d, req) {
-  try { routeSets[m] = await valhalla(o, d, m, m === 'auto' ? 2 : 0); }
+  try {
+    routeSets[m] = await valhalla(o, d, m, MODES[m].alts || 0);
+    routeSets[m].forEach(r => (r.buffer = MODES[m].buffer || 0));
+  }
   catch { routeSets[m] = 'err'; }
   if (req !== routeReq) return;
   if (m === routeMode) selectRoute(0, true); else renderRouteSheet();
@@ -1410,32 +1498,38 @@ function selectRoute(i, fit) {
   renderRouteSheet();
   if (fit) fitRoutes(set);
 }
+const T = r => r.time + (r.buffer || 0);
+const isCar = m => (MODES[m].costing || m) === 'auto';
 function renderRouteSheet(msg) {
   const set = routeSets[routeMode];
   $('#rsModes').innerHTML = Object.entries(MODES).map(([k, m]) => {
     const s = routeSets[k];
-    const t = Array.isArray(s) ? fmtDur(s[0].time) : s === 'err' ? '—' : '…';
-    return `<button role="tab" data-mode="${k}" aria-selected="${k === routeMode}" aria-label="${m.label}">${m.svg}<span>${t}</span></button>`;
+    const t = Array.isArray(s) ? fmtDur(T(s[0])) : s === 'err' ? '—' : '…';
+    return `<button role="tab" data-mode="${k}" aria-selected="${k === routeMode}" aria-label="${m.label}" title="${m.label}">${m.svg}<span>${t}</span></button>`;
   }).join('');
-  $('#rsTollWrap').hidden = routeMode !== 'auto';
+  $('#rsTollWrap').hidden = !isCar(routeMode);
   $('#rsNoToll').checked = avoidTolls;
   $('#rsGmaps').href = gmapsUrl(routeOrigin && !routeOrigin.here ? routeOrigin : null, routeDest);
   $('#rsStart').disabled = !route;
   $('#rsOpts').innerHTML = ''; $('#rsSteps').innerHTML = ''; $('#rsStepsWrap').hidden = true;
+  $('#rsPeek').innerHTML = route
+    ? `${MODES[routeMode].svg}${fmtDur(T(route))}・${fmtDist(route.dist)}${route.buffer ? '<small>余裕5分込み</small>' : ''}`
+    : `<small>${esc(msg || (set === 'err' ? 'ルートが見つかりませんでした' : 'ルートを探しています…'))}</small>`;
   if (msg || !route) {
     $('#rsSummary').innerHTML = `<span class="meta">${esc(msg || (set === 'err'
       ? 'ルートが見つかりませんでした。通信状況を確認するか「Googleマップでナビ」を使ってください。'
       : 'ルートを探しています…'))}</span>`;
     return;
   }
-  const eta = new Date(Date.now() + route.time * 1000);
-  const tag = selIdx === 0 ? '最速ルート' : 'ほかのルート';
-  const road = routeMode === 'auto' ? (route.toll ? '・有料道路あり' : '・有料道路なし') : '';
-  $('#rsSummary').innerHTML = `<strong class="eta-big">${fmtDur(route.time)}</strong>
-    <div><b>${fmtClock(eta)} に到着</b>・${tag}</div><div class="meta">${fmtDist(route.dist)}${road}</div>`;
+  const eta = new Date(Date.now() + T(route) * 1000);
+  const tag = routeMode === 'beginner' ? '初心者向け（余裕5分込み）' : selIdx === 0 ? '最速ルート' : 'ほかのルート';
+  const road = isCar(routeMode) ? (route.toll ? '・有料道路あり' : '・有料道路なし') : '';
+  $('#rsSummary').innerHTML = `<strong class="eta-big">${fmtDur(T(route))}</strong>
+    <div><b>${fmtClock(eta)} に到着</b>・${tag}</div><div class="meta">${fmtDist(route.dist)}${road}</div>` +
+    (routeMode === 'beginner' ? `<div class="meta">細い道や曲がる回数の多い道を、なるべく避けたルートです（運転だけなら約${fmtDur(route.time)}）</div>` : '');
   if (set.length > 1) {
     $('#rsOpts').innerHTML = set.map((r, i) => `<button class="ropt" data-i="${i}" aria-pressed="${i === selIdx}">
-      <b>${fmtDur(r.time)}</b><span>${fmtDist(r.dist)}${routeMode === 'auto' ? (r.toll ? '・有料' : '・一般道') : ''}</span><small>${i === 0 ? '最速' : 'ルート' + (i + 1)}</small></button>`).join('');
+      <b>${fmtDur(T(r))}</b><span>${fmtDist(r.dist)}${isCar(routeMode) ? (r.toll ? '・有料' : '・一般道') : ''}</span><small>${i === 0 ? '最速' : 'ルート' + (i + 1)}</small></button>`).join('');
   }
   $('#rsSteps').innerHTML = route.steps.map(s => `<li>${arrowSvg(s)}<span>${esc(s.verb)}${s.road ? '　' + esc(s.road) : ''}</span><small>${s.dist ? fmtDist(s.dist) : ''}</small></li>`).join('');
   $('#rsStepsWrap').hidden = false;
@@ -1448,8 +1542,8 @@ $('#rsOpts').addEventListener('click', e => { const b = e.target.closest('[data-
 $('#rsNoToll').addEventListener('change', e => {
   avoidTolls = e.target.checked; lsSet('sunrise_no_toll', avoidTolls ? '1' : '0');
   if (!routeOrigin || !routeDest) return;
-  routeSets.auto = null; route = null; clearRoute(); renderRouteSheet();
-  fetchMode('auto', routeOrigin, routeDest, routeReq);
+  routeSets.auto = routeSets.beginner = null; route = null; clearRoute(); renderRouteSheet();
+  fetchMode('auto', routeOrigin, routeDest, routeReq); fetchMode('beginner', routeOrigin, routeDest, routeReq);
 });
 
 // 線の上の「34分」の吹き出しの位置：ほかのルートは、選んだルートから一番離れた所に出す
@@ -1490,7 +1584,7 @@ function drawRoutes(set, sel, bubbles) {
     set.forEach((r, i) => {
       const el = document.createElement('button');
       el.className = 'route-bubble' + (i === sel ? ' sel' : '');
-      el.innerHTML = `<b>${fmtDur(r.time)}</b>${routeMode === 'auto' && set.length > 1 ? `<small>${r.toll ? '有料' : '一般道'}</small>` : ''}`;
+      el.innerHTML = `<b>${fmtDur(T(r))}</b>${isCar(routeMode) && set.length > 1 ? `<small>${r.toll ? '有料' : '一般道'}</small>` : ''}`;
       el.addEventListener('click', e => { e.stopPropagation(); selectRoute(i, false); });
       bubbleMarkers.push(new maplibregl.Marker({ element: el, anchor: 'bottom', offset: [0, -6] }).setLngLat(bubblePoint(r, set[sel])).addTo(map));
     });
