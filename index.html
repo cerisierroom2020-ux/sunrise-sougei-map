@@ -115,7 +115,10 @@ body.has-sheet #btnAdd{display:none}
 .me-dot{position:absolute;left:12px;top:12px;width:20px;height:20px;border-radius:50%;background:#1A73E8;border:3px solid #fff;box-shadow:0 0 0 6px rgba(26,115,232,.2),0 2px 6px rgba(0,0,0,.3)}
 .me-cone{display:none;position:absolute;left:4px;top:-18px;width:36px;height:40px;clip-path:polygon(50% 100%,0 0,100% 0);background:linear-gradient(to top,rgba(26,115,232,.45),rgba(26,115,232,0))}
 .me.has-heading .me-cone{display:block}
-.me-arrow{display:none;position:absolute;inset:0;width:44px;height:44px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.35))}
+.me-arrow{display:none;position:absolute;inset:6px;width:32px;height:32px}
+body.navigating .me{width:56px;height:56px;margin:-6px}
+body.navigating .me::before{content:"";position:absolute;inset:0;border-radius:50%;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.3)}
+body.navigating .me-arrow{inset:10px;width:36px;height:36px}
 body.navigating .me-dot,body.navigating .me-cone{display:none!important}
 body.navigating .me-arrow{display:block}
 .route-bubble{border:none;border-radius:10px;padding:5px 10px;background:#fff;color:#1F1F1F;box-shadow:0 2px 6px rgba(0,0,0,.3);font:inherit;display:grid;justify-items:center;line-height:1.2;cursor:pointer}
@@ -147,6 +150,7 @@ body.routing .topbar,body.routing .chips,body.routing #btnAdd{display:none}
 .sheet .sheet-head,.rs-peek{touch-action:none}
 #lock.checking .lock-card > :not(.sun):not(h1):not(#lockMsg){display:none}
 #lockMsg{margin:0;color:#B9C1D0;font-size:14px}
+#lock:not(.checking) #lockMsg{display:none}
 .route-card{position:absolute;z-index:1150;top:calc(var(--st) + 10px);left:12px;right:12px;background:var(--surface);border-radius:18px;box-shadow:var(--shadow);display:flex;gap:4px;padding:8px 6px 8px 14px}
 @media (min-width:760px){.route-card{right:auto;width:420px}}
 .rc-rows{flex:1;min-width:0;display:grid;gap:2px}
@@ -681,7 +685,7 @@ const LINK_KEY = (location.hash.slice(1).match(/^[\w-]{4,64}$/) || [])[0] || nul
 const PASSWORD = '1001';
 
 // アプリの版。公開のたびに変える。開いた時にサーバーの版と違えば、1回だけ読み込み直す
-const APP_VERSION = '2026-10-02 ルートのメニュー';
+const APP_VERSION = '2026-10-02 信号と曲がる矢印';
 (async () => {
   try {
     const html = await fetch(location.pathname + '?v=' + Date.now(), { cache: 'no-store' }).then(r => r.text());
@@ -945,10 +949,14 @@ const GMAP = {
 };
 function googleize(style) {
   const drop = new Set(['natural_earth', 'park_outline', 'road_area_pattern', 'landuse_residential', 'landuse_track', 'landuse_pitch', 'poi_r7', 'poi_r20']);
-  style.layers = style.layers.filter(l => l.type !== 'fill-extrusion' && l.type !== 'raster' && !drop.has(l.id));
+  style.layers = style.layers.filter(l => l.type !== 'raster' && !drop.has(l.id));
   for (const l of style.layers) {
     const id = l.id, p = (l.paint = l.paint || {});
-    if (l.type === 'background') p['background-color'] = GMAP.bg;
+    if (l.type === 'fill-extrusion') {
+      l.id = 'building-3d'; l.layout = { ...(l.layout || {}), visibility: 'none' };
+      p['fill-extrusion-color'] = '#F3F3F6'; p['fill-extrusion-opacity'] = 0.35;
+    }
+    else if (l.type === 'background') p['background-color'] = GMAP.bg;
     else if (id === 'park') { p['fill-color'] = GMAP.park; p['fill-opacity'] = 1; }
     else if (/^landcover_(wood|grass|wetland)$/.test(id)) { p['fill-color'] = GMAP.green; p['fill-opacity'] = 1; }
     else if (id === 'water') p['fill-color'] = GMAP.water;
@@ -1024,8 +1032,44 @@ function addOverlays() {
     map.addLayer({ id: 'route-casing', type: 'line', source: 'routes', filter: ['==', ['get', 'sel'], 1], layout: line, paint: { 'line-color': '#1C2B9E', 'line-width': w(8, 16) } }, before);
     map.addLayer({ id: 'route-main', type: 'line', source: 'routes', filter: ['==', ['get', 'sel'], 1], layout: line, paint: { 'line-color': '#3F4FF0', 'line-width': w(5, 11) } }, before);
   }
+  makeMapImages();
+  if (!map.getSource('maneuver')) {
+    map.addSource('maneuver', { type: 'geojson', data: EMPTY_FC });
+    const lw = (a, b) => ['interpolate', ['linear'], ['zoom'], 14, a, 19, b];
+    map.addLayer({ id: 'man-casing', type: 'line', source: 'maneuver', filter: ['==', ['geometry-type'], 'LineString'], layout: { 'line-cap': 'butt', 'line-join': 'round' }, paint: { 'line-color': '#1C2B9E', 'line-width': lw(10, 26) } }, before);
+    map.addLayer({ id: 'man-line', type: 'line', source: 'maneuver', filter: ['==', ['geometry-type'], 'LineString'], layout: { 'line-cap': 'butt', 'line-join': 'round' }, paint: { 'line-color': '#FFFFFF', 'line-width': lw(6, 17) } }, before);
+    map.addLayer({ id: 'man-head', type: 'symbol', source: 'maneuver', filter: ['==', ['geometry-type'], 'Point'], layout: {
+      'icon-image': 'arrowhead', 'icon-rotate': ['get', 'brg'], 'icon-rotation-alignment': 'map', 'icon-pitch-alignment': 'map',
+      'icon-allow-overlap': true, 'icon-ignore-placement': true, 'icon-size': ['interpolate', ['linear'], ['zoom'], 14, 0.6, 19, 1.6] } });
+  }
+  if (!map.getSource('signals')) {
+    map.addSource('signals', { type: 'geojson', data: EMPTY_FC });
+    map.addLayer({ id: 'signals', type: 'symbol', source: 'signals', minzoom: 12, layout: {
+      'icon-image': 'tlight', 'icon-allow-overlap': true, 'icon-ignore-placement': true,
+      'icon-size': ['interpolate', ['linear'], ['zoom'], 12, 0.5, 15, 0.8, 18, 1.1] } });
+  }
 }
 
+function makeMapImages() {
+  const add = (name, w, h, draw) => {
+    if (map.hasImage(name)) return;
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const g = c.getContext('2d'); draw(g);
+    map.addImage(name, g.getImageData(0, 0, w, h), { pixelRatio: 2 });
+  };
+  const rr = (g, x, y, w, h, r) => { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); };
+  // 信号マーク（Googleマップと同じ横長の信号）
+  add('tlight', 84, 36, g => {
+    rr(g, 1, 1, 82, 34, 17); g.fillStyle = '#FFFFFF'; g.fill();
+    rr(g, 5, 5, 74, 26, 13); g.fillStyle = '#202124'; g.fill();
+    [['#EA4335', 22], ['#FBBC04', 42], ['#34A853', 62]].forEach(([col, x]) => { g.beginPath(); g.arc(x, 18, 8, 0, Math.PI * 2); g.fillStyle = col; g.fill(); });
+  });
+  // 曲がる場所の矢印の先（上向き。進む向きに回して使う）
+  add('arrowhead', 64, 64, g => {
+    g.beginPath(); g.moveTo(32, 4); g.lineTo(60, 52); g.lineTo(4, 52); g.closePath();
+    g.lineJoin = 'round'; g.lineWidth = 6; g.strokeStyle = '#1C2B9E'; g.stroke(); g.fillStyle = '#FFFFFF'; g.fill();
+  });
+}
 function setLayerBtn() {
   // ボタンには「押すと切り替わる先」を表示
   $('#layerLabel').textContent = isPhoto ? '地図' : '航空写真';
@@ -1669,7 +1713,7 @@ const TURN = {
 function normTrip(t) {
   let coords = []; const steps = [];
   t.legs.forEach((leg, li) => {
-    const c = decodePoly6(leg.shape), last = li === t.legs.length - 1;
+    const c = decodePoly6(leg.shape), last = li === t.legs.length - 1, off = coords.length;
     leg.maneuvers.forEach(m => {
       if (li > 0 && m.type >= 1 && m.type <= 3) return;            // 2区間目以降の「出発」は出さない
       let [verb, angle] = TURN[m.type] || ['直進', 0];
@@ -1680,6 +1724,7 @@ function normTrip(t) {
         type: m.type, verb: m.type === 26 && m.roundabout_exit_count ? `ロータリーで${m.roundabout_exit_count}番目の出口へ` : verb,
         angle: end ? null : angle, arrive: end && last, via, road: pickRoad(m.street_names || m.begin_street_names),
         loc: { lng: at[0], lat: at[1] }, dist: (m.length || 0) * 1000, time: m.time || 0,
+        idx: off + Math.min(m.begin_shape_index, c.length - 1),
       });
     });
     coords = coords.concat(c);
@@ -1723,7 +1768,7 @@ async function calcRoutes() {
 async function fetchMode(m, req) {
   try {
     routeSets[m] = await valhalla(routeOrigin, routeDest, m, MODES[m].alts || 0, stopPoints());
-    routeSets[m].forEach(r => (r.buffer = MODES[m].buffer || 0));
+    routeSets[m].forEach(r => { r.buffer = MODES[m].buffer || 0; r.costing = MODES[m].costing || m; });
   }
   catch { routeSets[m] = 'err'; }
   if (req !== routeReq) return;
@@ -1738,6 +1783,8 @@ function selectRoute(i, fit) {
   drawRoutes(set, selIdx, true);
   renderRouteSheet();
   if (fit) fitRoutes(set);
+  const r = route;
+  loadSignals(r).then(sig => { if (route === r && !navActive) { setSignals(sig); renderRouteSheet(); } });
 }
 const T = r => r.time + (r.buffer || 0);
 const isCar = m => (MODES[m].costing || m) === 'auto';
@@ -1786,7 +1833,8 @@ function renderRouteSheet(msg) {
     $('#rsOpts').innerHTML = set.map((r, i) => `<button class="ropt" data-i="${i}" aria-pressed="${i === selIdx}">
       <b>${fmtDur(T(r))}</b><span>${fmtDist(r.dist)}${isCar(routeMode) ? (r.toll ? '・有料' : '・一般道') : ''}</span><small>${i === 0 ? '最速' : 'ルート' + (i + 1)}</small></button>`).join('');
   }
-  $('#rsSteps').innerHTML = route.steps.map(s => `<li>${arrowSvg(s)}<span>${esc(s.verb)}${s.road ? '　' + esc(s.road) : ''}</span><small>${s.dist ? fmtDist(s.dist) : ''}</small></li>`).join('');
+  $('#rsSteps').innerHTML = route.steps.map(s => `<li>${arrowSvg(s)}<span>${s.signal && isTurn(s) ? '信号を' : ''}${esc(s.verb)}${s.road ? '　' + esc(s.road) : ''}</span><small>${s.dist ? fmtDist(s.dist) : ''}</small></li>`).join('') +
+    (route.signals ? `<li class="meta">このルートの信号：${route.signals.length}か所</li>` : '');
   $('#rsStepsWrap').hidden = false;
 }
 $('#rsModes').addEventListener('click', e => {
@@ -1973,6 +2021,8 @@ function drawRoutes(set, sel, bubbles) {
 }
 function clearRoute() {
   lastRouteDraw = null;
+  if (map?.getSource('signals')) map.getSource('signals').setData(EMPTY_FC);
+  if (map?.getSource('maneuver')) map.getSource('maneuver').setData(EMPTY_FC);
   bubbleMarkers.forEach(m => m.remove()); bubbleMarkers = [];
   if (map?.getSource('routes')) map.getSource('routes').setData(EMPTY_FC);
 }
@@ -2024,8 +2074,103 @@ $('#rsStart').addEventListener('click', async () => {
   }
   startNav();
 });
+/* ---------- 信号：ルート上の信号の位置を Valhalla から取得 ---------- */
+const VH_BASE = 'https://valhalla1.openstreetmap.de/';
+function encodePoly6(coords) {
+  let out = '', plat = 0, plng = 0;
+  const enc = v => { v = v < 0 ? ~(v << 1) : (v << 1); let s = ''; while (v >= 0x20) { s += String.fromCharCode((0x20 | (v & 0x1f)) + 63); v >>= 5; } return s + String.fromCharCode(v + 63); };
+  for (const [lng, lat] of coords) {
+    const la = Math.round(lat * 1e6), ln = Math.round(lng * 1e6);
+    out += enc(la - plat) + enc(ln - plng); plat = la; plng = ln;
+  }
+  return out;
+}
+// ルートの始まりからの距離（m）を点ごとに
+function cumDist(r) {
+  if (r.cum) return r.cum;
+  const c = [0];
+  for (let i = 1; i < r.coords.length; i++) {
+    const a = r.coords[i - 1], b = r.coords[i];
+    c.push(c[i - 1] + haversine({ lng: a[0], lat: a[1] }, { lng: b[0], lat: b[1] }));
+  }
+  return (r.cum = c);
+}
+function loadSignals(r) {
+  if (r.sigPromise) return r.sigPromise;
+  return (r.sigPromise = (async () => {
+    try {
+      const body = {
+        encoded_polyline: encodePoly6(r.coords), shape_match: 'edge_walk', costing: r.costing || 'auto',
+        filters: { attributes: ['edge.end_shape_index', 'node.traffic_signal'], action: 'include' },
+      };
+      const j = await fetch(VH_BASE + 'trace_attributes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json());
+      const sig = [];
+      for (const e of j.edges || []) {
+        if (!e.end_node?.traffic_signal) continue;
+        const i = Math.min(e.end_shape_index, r.coords.length - 1), c = r.coords[i], p = { lng: c[0], lat: c[1], idx: i };
+        if (!sig.some(s => haversine(s, p) < 20)) sig.push(p);
+      }
+      r.signals = sig;
+    } catch { r.signals = []; }
+    // 曲がる場所が信号かどうか
+    const cum = cumDist(r);
+    r.steps.forEach(s => { s.signal = s.idx != null && r.signals.some(g => Math.abs(cum[g.idx] - cum[s.idx]) < 25); });
+    return r.signals;
+  })());
+}
+const isTurn = s => s.angle != null && s.angle !== 0 && !s.arrive && !s.via;
+// 「次の信号を」「2つ目の信号を」：今いる所から曲がる場所までの信号の数で決める
+function signalPhrase(r, fromIdx, step) {
+  if (!r.signals || !step.signal || !isTurn(step)) return '';
+  const cum = cumDist(r), u = cum[fromIdx] || 0, m = cum[step.idx];
+  const n = r.signals.filter(g => cum[g.idx] > u + 10 && cum[g.idx] < m - 25).length + 1;
+  return n === 1 ? '次の信号を' : n <= 3 ? `${n}つ目の信号を` : '信号を';
+}
+function setSignals(list) {
+  mapReady.then(() => {
+    addOverlays();
+    map.getSource('signals').setData({ type: 'FeatureCollection', features: (list || []).map(s => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [s.lng, s.lat] } })) });
+  });
+}
+// 曲がる場所の白い矢印（曲がる手前30m〜曲がった後25m）
+function setManeuver(r, step) {
+  mapReady.then(() => {
+    addOverlays();
+    const src = map.getSource('maneuver'); if (!src) return;
+    if (!r || !step || step.idx == null || !isTurn(step)) { src.setData(EMPTY_FC); return; }
+    // 点と点の間が離れていても、ちょうど30m手前〜25m先で切り出す
+    const cum = cumDist(r), m = cum[step.idx], total = cum[cum.length - 1];
+    const at = dd => {
+      dd = Math.max(0, Math.min(total, dd));
+      let k = 1; while (k < cum.length - 1 && cum[k] < dd) k++;
+      const a = r.coords[k - 1], b = r.coords[k], seg = cum[k] - cum[k - 1] || 1, t = (dd - cum[k - 1]) / seg;
+      return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    };
+    const d0 = m - 30, d1 = m + 25;
+    const line = [at(d0), ...r.coords.filter((c, k) => cum[k] > d0 && cum[k] < d1), at(d1)];
+    if (line.length < 2) { src.setData(EMPTY_FC); return; }
+    const a = line[line.length - 2], b = line[line.length - 1];
+    const brg = bearingDeg({ lng: a[0], lat: a[1] }, { lng: b[0], lat: b[1] });
+    src.setData({ type: 'FeatureCollection', features: [
+      { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: line } },
+      { type: 'Feature', properties: { brg }, geometry: { type: 'Point', coordinates: b } },
+    ] });
+  });
+}
+// ルート上のどこにいるか（点の番号）
+let navIdx = 0;
+function nearestIdx(r, p) {
+  let best = navIdx, bd = Infinity;
+  const lo = Math.max(0, navIdx - 10), hi = Math.min(r.coords.length, navIdx + 600);
+  for (let i = lo; i < hi; i++) {
+    const c = r.coords[i], d = haversine(p, { lng: c[0], lat: c[1] });
+    if (d < bd) { bd = d; best = i; }
+  }
+  return best;
+}
+
 async function startNav() {
-  navActive = true; follow = true; headingUp = true; stepIdx = 0; announced = new Set(); offCount = 0; arrived = false;
+  navActive = true; follow = true; headingUp = true; stepIdx = 0; announced = new Set(); offCount = 0; arrived = false; navIdx = 0;
   $('#pinSheet').hidden = $('#placeSheet').hidden = $('#routeSheet').hidden = true;
   document.body.classList.remove('has-sheet'); setSheetH(0);
   hideAerialMini(); clearDraft();
@@ -2034,6 +2179,8 @@ async function startNav() {
   $('#navGmaps').href = gmapsUrl(null, routeDest, routeMode, stopPoints());
   $('#routeCard').hidden = true; closeMenu();
   drawRoutes([route], 0, false);   // ナビ中は選んだルートだけ
+  set3D(true);
+  loadSignals(route).then(s => { if (navActive) { setSignals(s); updateNav(); } });
   // まだ動いていない時は、ルートの最初の向きを使う
   if (curHeading == null || haversine(userPos, { lng: route.coords[0][0], lat: route.coords[0][1] }) < 60) {
     const a = route.coords[0], b = route.coords[Math.min(6, route.coords.length - 1)];
@@ -2043,12 +2190,15 @@ async function startNav() {
   updateNav(true);
   try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
 }
+// 建物をうっすら立体に（ナビ中だけ）
+function set3D(on) { mapReady.then(() => { if (map.getLayer('building-3d')) map.setLayoutProperty('building-3d', 'visibility', on ? 'visible' : 'none'); }); }
+let navZoom = 17.3;
 function navCamera(duration = 900) {
   if (!navActive || !userPos) return;
   map.easeTo({
-    center: [userPos.lng, userPos.lat], zoom: map.getZoom() < 16 ? 17.5 : map.getZoom(),
-    bearing: headingUp ? (curHeading || 0) : 0, pitch: headingUp ? 55 : 0,
-    padding: { top: Math.round(innerHeight * 0.42), bottom: 110, left: 0, right: 0 },
+    center: [userPos.lng, userPos.lat], zoom: navZoom,
+    bearing: headingUp ? (curHeading || 0) : 0, pitch: headingUp ? 60 : 0,
+    padding: { top: Math.round(innerHeight * 0.45), bottom: 110, left: 0, right: 0 },
     duration, easing: t => t,
   });
 }
@@ -2057,7 +2207,7 @@ function endNav(msg) {
   setRouting(false);
   document.body.classList.remove('navigating');
   $('#navTop').hidden = true; $('#navThen').hidden = true; $('#navBottom').hidden = true; $('#navSide').hidden = true; $('#navRecenter').hidden = true;
-  clearRoute(); route = null;
+  clearRoute(); route = null; set3D(false);
   map.easeTo({ pitch: 0, bearing: 0, padding: { top: 0, bottom: 0, left: 0, right: 0 }, duration: 800 });
   try { wakeLock?.release(); } catch {} wakeLock = null;
   if (msg) toast(msg);
@@ -2072,21 +2222,29 @@ function updateNav(first) {
     arrived = true;
     $('#navArrow').innerHTML = svgInner(arrowSvg({ arrive: true }, '#fff'));
     $('#navDist').textContent = ''; $('#navSub').textContent = '到着しました'; $('#navRoad').textContent = routeDest.name;
-    $('#navThen').hidden = true;
+    $('#navThen').hidden = true; setManeuver(null);
     speak(`目的地、${routeDest.name}に到着しました`);
     setTimeout(() => endNav('目的地に到着しました'), 4000);
     return;
   }
-  while (stepIdx < steps.length - 1 && haversine(userPos, steps[stepIdx + 1].loc) < 25) stepIdx++;
+  navIdx = nearestIdx(route, userPos);
+  // 曲がる場所を通り過ぎたら次へ（25m以内に近づいた、またはルート上で追い越した）
+  const cum = cumDist(route);
+  while (stepIdx < steps.length - 1) {
+    const s = steps[stepIdx + 1];
+    if (haversine(userPos, s.loc) < 25 || (s.idx != null && cum[navIdx] > cum[s.idx] + 15)) stepIdx++;
+    else break;
+  }
   const nextI = Math.min(stepIdx + 1, steps.length - 1), next = steps[nextI];
-  const dNext = haversine(userPos, next.loc);
+  const dNext = next.idx != null ? Math.max(0, cum[next.idx] - cum[navIdx]) : haversine(userPos, next.loc);
   let rem = dNext; for (let k = nextI; k < steps.length; k++) rem += steps[k].dist;
   const remSec = route.dist ? route.time * rem / route.dist : 0;
 
+  const sig = signalPhrase(route, navIdx, next), action = sig + next.verb;
   $('#navArrow').innerHTML = svgInner(arrowSvg(next, '#fff'));
   $('#navDist').textContent = fmtDist(dNext);
-  $('#navSub').textContent = next.road ? next.verb : '';
-  $('#navRoad').textContent = next.road || next.verb;
+  $('#navSub').textContent = next.road ? action : '';
+  $('#navRoad').textContent = next.road || action;
   // 曲がってすぐ次も曲がる時は「その先」を出す
   document.documentElement.style.setProperty('--navtop-h', $('#navTop').offsetHeight + 'px');
   const then = steps[nextI + 1];
@@ -2095,10 +2253,14 @@ function updateNav(first) {
   } else $('#navThen').hidden = true;
   $('#navLeft').textContent = fmtDur(remSec);
   $('#navRemain').textContent = `${fmtDist(rem)}・${fmtClock(new Date(Date.now() + remSec * 1000))} 到着`;
+  // 曲がる場所の白い矢印。近づいたら地図を拡大する
+  setManeuver(route, next);
+  navZoom = dNext < 250 && isTurn(next) ? 18.3 : 17.3;
 
-  if (first) { speak(`ルート案内を開始します。${speechDist(dNext)}先、${sayStep(next)}`); announced.add(nextI + 'far'); }
-  else if (dNext > 400 && !announced.has(nextI + 'far')) { announced.add(nextI + 'far'); speak(`${speechDist(dNext)}先、${sayStep(next)}`); }
-  else if (dNext < 150 && !announced.has(nextI + 'near')) { announced.add(nextI + 'near'); announced.add(nextI + 'far'); speak(`まもなく、${sayStep(next)}`); }
+  const say = `${action}${next.road && !next.arrive && !next.via ? '、' + next.road + '方面' : ''}です`;
+  if (first) { speak(`ルート案内を開始します。${speechDist(dNext)}先、${say}`); announced.add(nextI + 'far'); }
+  else if (dNext > 400 && !announced.has(nextI + 'far')) { announced.add(nextI + 'far'); speak(`${speechDist(dNext)}先、${say}`); }
+  else if (dNext < 150 && !announced.has(nextI + 'near')) { announced.add(nextI + 'near'); announced.add(nextI + 'far'); speak(`まもなく、${say}`); }
 
   // ルートから外れたら自動で再検索
   if (distToCoords(userPos, route.coords) > 50) {
@@ -2110,9 +2272,14 @@ function updateNav(first) {
 async function reroute() {
   speak('ルートを再検索します');
   try {
-    const set = await valhalla({ ...userPos, heading: curHeading }, routeDest, routeMode, 0);
+    const passed = route.steps.slice(0, stepIdx + 1).filter(s => s.via).length;
+    if (passed) stops = stops.slice(passed);
+    const set = await valhalla({ ...userPos, heading: curHeading }, routeDest, routeMode, 0, stopPoints());
     if (!navActive) return;
-    route = set[0]; drawRoutes([route], 0, false); stepIdx = 0; announced = new Set(); updateNav();
+    set[0].buffer = MODES[routeMode].buffer || 0; set[0].costing = MODES[routeMode].costing || routeMode;
+    route = set[0]; drawRoutes([route], 0, false); stepIdx = 0; navIdx = 0; announced = new Set();
+    loadSignals(route).then(s => { if (navActive && route === set[0]) { setSignals(s); updateNav(); } });
+    updateNav();
   } catch { toast('ルートを再検索できませんでした'); }
 }
 
