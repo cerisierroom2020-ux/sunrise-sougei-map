@@ -687,7 +687,7 @@ const LINK_KEY = (location.hash.slice(1).match(/^[\w-]{4,64}$/) || [])[0] || nul
 const PASSWORD = '1001';
 
 // アプリの版。公開のたびに変える。開いた時にサーバーの版と違えば、1回だけ読み込み直す
-const APP_VERSION = '2026-10-03 ナビ2D表示';
+const APP_VERSION = '2026-10-03 追従と再検索の改善';
 (async () => {
   try {
     const html = await fetch(location.pathname + '?v=' + Date.now(), { cache: 'no-store' }).then(r => r.text());
@@ -930,7 +930,10 @@ async function startApp() {
   const farCheck = () => document.body.classList.toggle('far', map.getZoom() < 14);
   map.on('zoom', farCheck); farCheck();
   map.on('pitch', updateCompass);
-  map.on('click', 'route-alt', e => { if (!navActive) selectRoute(e.features[0].properties.idx, false); });
+  map.on('click', 'route-alt', e => {
+    const i = e.features[0].properties.idx;
+    if (navActive) switchNavRoute(i); else selectRoute(i, false);
+  });
   map.on('mouseenter', 'route-alt', () => (map.getCanvas().style.cursor = 'pointer'));
   map.on('mouseleave', 'route-alt', () => (map.getCanvas().style.cursor = ''));
 
@@ -1163,10 +1166,13 @@ function bearingDeg(a, b) {
   const x = Math.cos(r(a.lat)) * Math.sin(r(b.lat)) - Math.sin(r(a.lat)) * Math.cos(r(b.lat)) * Math.cos(r(b.lng - a.lng));
   return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
 }
+let gpsSpeed = 0, gpsAcc = 30, lastFixAt = 0, shownPos = null, meAnim = 0;
 function startLocate() {
   if (!navigator.geolocation) return;
   navigator.geolocation.watchPosition(pos => {
     const c = pos.coords, p = { lat: c.latitude, lng: c.longitude };
+    const now = performance.now(), gap = lastFixAt ? Math.min(1500, Math.max(300, now - lastFixAt)) : 800;
+    lastFixAt = now; gpsSpeed = c.speed || 0; gpsAcc = c.accuracy || 30;
     // 進む向き：GPS の向き → 移動方向 の順で使う
     let h = (c.heading != null && !isNaN(c.heading) && (c.speed || 0) > 1) ? c.heading : null;
     if (h == null && lastFix && haversine(lastFix, p) > 8) h = bearingDeg(lastFix, p);
@@ -1180,10 +1186,51 @@ function startLocate() {
       el.className = 'me';
       el.innerHTML = '<div class="me-cone"></div><div class="me-dot"></div><svg class="me-arrow" viewBox="0 0 40 40"><path d="M20 3 34 35 20 27 6 35z" fill="#3D63F2" stroke="#fff" stroke-width="3" stroke-linejoin="round"/></svg>';
       userMarker = new maplibregl.Marker({ element: el, rotationAlignment: 'map', pitchAlignment: 'map' }).setLngLat([p.lng, p.lat]).addTo(map);
-    } else userMarker.setLngLat([p.lng, p.lat]);
+      shownPos = p;
+    }
     if (curHeading != null) { userMarker.setRotation(curHeading); userMarker.getElement().classList.add('has-heading'); }
-    if (navActive) updateNav();
-  }, () => {}, { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
+    if (navActive) {
+      updateNav();
+      // 道路の上に吸い付けて、走る速さから少し先を予測し、次の位置が届くまでの間を滑らかに動かす
+      const target = navTarget(p);
+      moveMe(target, gap);
+      if (follow) navCamera(gap, target);
+    } else { cancelAnimationFrame(meAnim); shownPos = p; userMarker.setLngLat([p.lng, p.lat]); }
+  }, () => {}, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
+}
+function moveMe(target, dur) {
+  cancelAnimationFrame(meAnim);
+  const from = shownPos || target, t0 = performance.now();
+  const step = () => {
+    const t = Math.min(1, (performance.now() - t0) / dur);
+    shownPos = { lat: from.lat + (target.lat - from.lat) * t, lng: from.lng + (target.lng - from.lng) * t };
+    userMarker.setLngLat([shownPos.lng, shownPos.lat]);
+    if (t < 1) meAnim = requestAnimationFrame(step);
+  };
+  step();
+}
+function movePoint(p, deg, m) {
+  const r = Math.PI / 180;
+  return { lat: p.lat + m * Math.cos(deg * r) / 110540, lng: p.lng + m * Math.sin(deg * r) / (111320 * Math.cos(p.lat * r)) };
+}
+function navTarget(p) {
+  let q = p;
+  if (route && navIdx >= 0) {
+    // ルートの線から25m以内なら、線の上に乗せる
+    const kx = 111320 * Math.cos(p.lat * Math.PI / 180), ky = 110540, cs = route.coords;
+    let best = null, bd = 25;
+    for (let i = Math.max(0, navIdx - 5); i < Math.min(cs.length - 1, navIdx + 80); i++) {
+      const ax = (cs[i][0] - p.lng) * kx, ay = (cs[i][1] - p.lat) * ky, bx = (cs[i + 1][0] - p.lng) * kx, by = (cs[i + 1][1] - p.lat) * ky;
+      const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+      const t = l2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / l2)) : 0;
+      const d = Math.hypot(ax + t * dx, ay + t * dy);
+      if (d < bd) { bd = d; best = { lng: cs[i][0] + (cs[i + 1][0] - cs[i][0]) * t, lat: cs[i][1] + (cs[i + 1][1] - cs[i][1]) * t }; }
+    }
+    if (best) q = best;
+  }
+  // 走っている時は、位置が届くまでの遅れの分（最大20m）先に進めておく
+  if (gpsSpeed > 2 && curHeading != null) q = movePoint(q, curHeading, Math.min(20, gpsSpeed * 0.7));
+  return q;
 }
 // 右側の「現在地に戻る」ボタン
 $('#btnLocate').addEventListener('click', () => {
@@ -2173,8 +2220,9 @@ function startDirection(r) {
 // ルート上のどこにいるか（点の番号）
 let navIdx = 0;
 function nearestIdx(r, p) {
-  let best = navIdx, bd = Infinity;
-  const lo = Math.max(0, navIdx - 10), hi = Math.min(r.coords.length, navIdx + 600);
+  let best = Math.max(0, navIdx), bd = Infinity;
+  const full = navIdx < 0;
+  const lo = full ? 0 : Math.max(0, navIdx - 10), hi = full ? r.coords.length : Math.min(r.coords.length, navIdx + 600);
   for (let i = lo; i < hi; i++) {
     const c = r.coords[i], d = haversine(p, { lng: c[0], lat: c[1] });
     if (d < bd) { bd = d; best = i; }
@@ -2183,7 +2231,7 @@ function nearestIdx(r, p) {
 }
 
 async function startNav() {
-  navActive = true; follow = true; headingUp = true; stepIdx = 0; announced = new Set(); offCount = 0; arrived = false; navIdx = 0;
+  navActive = true; follow = true; headingUp = true; stepIdx = 0; announced = new Set(); offCount = 0; arrived = false; navIdx = -1;
   $('#pinSheet').hidden = $('#placeSheet').hidden = $('#routeSheet').hidden = true;
   document.body.classList.remove('has-sheet'); setSheetH(0);
   hideAerialMini(); clearDraft();
@@ -2191,7 +2239,9 @@ async function startNav() {
   $('#navTop').hidden = false; $('#navBottom').hidden = false; $('#navSide').hidden = false; $('#navRecenter').hidden = true;
   $('#navGmaps').href = gmapsUrl(null, routeDest, routeMode, stopPoints());
   $('#routeCard').hidden = true; closeMenu();
-  drawRoutes([route], 0, false);   // ナビ中は選んだルートだけ
+  // 選んだルートを濃く、ほかのルートを薄く（Googleマップと同じ）
+  navAlts = Array.isArray(routeSets[routeMode]) ? routeSets[routeMode].filter(r => r !== route) : [];
+  drawNav();
   set3D(nav3d);
   loadSignals(route).then(s => { if (navActive) { setSignals(s); updateNav(); } });
   // まだ動いていない時は、ルートの最初の向きを使う
@@ -2205,7 +2255,7 @@ async function startNav() {
 }
 // 建物をうっすら立体に（ナビ中だけ）
 function set3D(on) { mapReady.then(() => { if (map.getLayer('building-3d')) map.setLayoutProperty('building-3d', 'visibility', on ? 'visible' : 'none'); }); }
-let navZoom = 17.3;
+let navZoom = 16.3;
 // 2D（真上から）が基本。3D が好きな人は切り替えられる（端末ごとに覚える）
 let nav3d = lsGet('sunrise_nav3d') === '1';
 function setViewBtn() { $('#nav3d').textContent = nav3d ? '3D' : '2D'; $('#nav3d').setAttribute('aria-pressed', nav3d); }
@@ -2215,10 +2265,10 @@ $('#nav3d').addEventListener('click', () => {
   set3D(nav3d); follow = true; $('#navRecenter').hidden = true; navCamera(500);
   toast(nav3d ? '3D（斜めから）で表示します' : '2D（真上から）で表示します');
 });
-function navCamera(duration = 900) {
-  if (!navActive || !userPos) return;
+function navCamera(duration = 900, at = shownPos || userPos) {
+  if (!navActive || !at) return;
   map.easeTo({
-    center: [userPos.lng, userPos.lat], zoom: navZoom,
+    center: [at.lng, at.lat], zoom: navZoom,
     bearing: headingUp ? (curHeading || 0) : 0, pitch: headingUp && nav3d ? 60 : 0,
     padding: { top: Math.round(innerHeight * 0.45), bottom: 110, left: 0, right: 0 },
     duration, easing: t => t,
@@ -2287,32 +2337,56 @@ function updateNav(first) {
   $('#navRemain').textContent = `${fmtDist(rem)}・${fmtClock(new Date(Date.now() + remSec * 1000))} 到着`;
   // 曲がる場所の白い矢印。近づいたら地図を拡大する
   setManeuver(route, next);
-  navZoom = dNext < 250 && isTurn(next) ? 18.3 : 17.3;
+  navZoom = dNext < 200 && isTurn(next) ? 17.3 : 16.3;
 
   const say = `${action}${next.road && !next.arrive && !next.via ? '、' + next.road + '方面' : ''}です`;
   if (first) { speak(`ルート案内を開始します。${startDirection(route)}に進んでください。${speechDist(dNext)}先、${say}`); announced.add(nextI + 'far'); }
   else if (dNext > 400 && !announced.has(nextI + 'far')) { announced.add(nextI + 'far'); speak(`${speechDist(dNext)}先、${say}`); }
   else if (dNext < 150 && !announced.has(nextI + 'near')) { announced.add(nextI + 'near'); announced.add(nextI + 'far'); speak(`まもなく、${say}`); }
 
-  // ルートから外れたら自動で再検索
-  if (distToCoords(userPos, route.coords) > 50) {
-    if (++offCount >= 3 && Date.now() - lastReroute > 15000) { lastReroute = Date.now(); offCount = 0; reroute(); }
+  // ルートから外れた（30m以上、GPSの精度が悪い時は最大60m）か、逆向きに走っていたら、すぐに探し直す
+  const offD = distToCoords(userPos, route.coords), lim = Math.max(30, Math.min(60, gpsAcc));
+  let wrongWay = false;
+  if (gpsSpeed > 3 && curHeading != null && navIdx < route.coords.length - 1) {
+    const a = route.coords[navIdx], b = route.coords[navIdx + 1];
+    const rb = bearingDeg({ lng: a[0], lat: a[1] }, { lng: b[0], lat: b[1] });
+    wrongWay = Math.abs(((curHeading - rb) + 540) % 360 - 180) > 135;
+  }
+  if (offD > lim || wrongWay) {
+    if (++offCount >= 2 && !rerouting && Date.now() - lastReroute > 5000) { lastReroute = Date.now(); offCount = 0; reroute(); }
   } else offCount = 0;
 
-  if (follow) navCamera();
+  // ほかのルート：もう通らなくなった（200m以上離れた）ものは消す
+  const keep = navAlts.filter(a => distToCoords(userPos, a.coords) < 200);
+  if (keep.length !== navAlts.length) { navAlts = keep; drawNav(); }
 }
+let rerouting = false, navAlts = [];
+const drawNav = () => drawRoutes([route, ...navAlts], 0, false);
 async function reroute() {
+  rerouting = true;
   speak('ルートを再検索します');
+  $('#navSub').textContent = ''; $('#navRoad').textContent = 'ルートを再検索しています…'; $('#navDist').textContent = '';
   try {
     const passed = route.steps.slice(0, stepIdx + 1).filter(s => s.via).length;
     if (passed) stops = stops.slice(passed);
-    const set = await valhalla({ ...userPos, heading: curHeading }, routeDest, routeMode, 0, stopPoints());
+    const set = await valhalla({ ...userPos, heading: curHeading }, routeDest, routeMode, 1, stopPoints());
     if (!navActive) return;
-    set[0].buffer = MODES[routeMode].buffer || 0; set[0].costing = MODES[routeMode].costing || routeMode;
-    route = set[0]; drawRoutes([route], 0, false); stepIdx = 0; navIdx = 0; announced = new Set();
-    loadSignals(route).then(s => { if (navActive && route === set[0]) { setSignals(s); updateNav(); } });
-    updateNav();
+    set.forEach(r => { r.buffer = MODES[routeMode].buffer || 0; r.costing = MODES[routeMode].costing || routeMode; });
+    useNavRoute(set[0], set.slice(1));
   } catch { toast('ルートを再検索できませんでした'); }
+  finally { rerouting = false; }
+}
+// ナビ中のルートを入れ替える（再検索・ほかのルートをタップした時）
+function useNavRoute(r, alts) {
+  route = r; navAlts = alts; stepIdx = 0; navIdx = -1; announced = new Set();
+  drawNav();
+  loadSignals(r).then(s => { if (navActive && route === r) { setSignals(s); updateNav(); } });
+  updateNav();
+}
+function switchNavRoute(i) {
+  const alt = navAlts[i - 1]; if (!alt) return;
+  useNavRoute(alt, [route, ...navAlts.filter(a => a !== alt)].filter(a => distToCoords(userPos, a.coords) < 200));
+  speak('ルートを変更しました'); toast('ルートを変更しました');
 }
 
 /* =========================================================
