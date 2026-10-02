@@ -265,6 +265,7 @@ body.navigating .aerial-mini{bottom:calc(var(--sb) + 132px)}
 .nav-then{position:absolute;z-index:1290;top:calc(var(--st) + 10px + var(--navtop-h,96px) - 4px);left:12px;background:#0A443F;color:#fff;border-radius:0 0 14px 14px;padding:8px 14px 8px 16px;display:flex;align-items:center;gap:6px;font-weight:700;font-size:14px;box-shadow:var(--shadow)}
 .nav-then svg{width:22px;height:22px}
 .nav-side{position:absolute;z-index:1300;right:12px;top:40%;display:grid;gap:12px}
+.view-btn{font-weight:900;font-size:16px;color:var(--ink)}
 .nav-bottom{position:absolute;z-index:1300;left:0;right:0;bottom:0;background:var(--surface);border-radius:20px 20px 0 0;box-shadow:var(--shadow);padding:14px 16px calc(var(--sb) + 14px);display:flex;align-items:center;gap:10px}
 @media (min-width:760px){.nav-bottom{left:12px;right:auto;width:440px;bottom:12px;border-radius:20px}}
 .nav-stats{flex:1;min-width:0}
@@ -484,6 +485,7 @@ body.navigating .maplibregl-ctrl-bottom-right,body.has-sheet .maplibregl-ctrl-bo
   <div class="nav-side" id="navSide" hidden>
     <button class="round" id="navCompass" aria-label="進む向き／北を上 の切り替え"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 15 12H9z" fill="#E8453C"/><path d="M12 22 9 12h6z" fill="#9AA0A6"/></svg></button>
     <button class="round" id="navVoice" aria-label="音声案内" aria-pressed="true"></button>
+    <button class="round view-btn" id="nav3d" aria-label="2D／3D の切り替え"></button>
   </div>
   <button class="recenter" id="navRecenter" hidden>
     <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2 4 20l8-4 8 4z"/></svg>現在地に戻る
@@ -685,7 +687,7 @@ const LINK_KEY = (location.hash.slice(1).match(/^[\w-]{4,64}$/) || [])[0] || nul
 const PASSWORD = '1001';
 
 // アプリの版。公開のたびに変える。開いた時にサーバーの版と違えば、1回だけ読み込み直す
-const APP_VERSION = '2026-10-02 信号と曲がる矢印';
+const APP_VERSION = '2026-10-03 ナビ2D表示';
 (async () => {
   try {
     const html = await fetch(location.pathname + '?v=' + Date.now(), { cache: 'no-store' }).then(r => r.text());
@@ -893,7 +895,7 @@ async function checkPwd() {
 let map, isPhoto = false, mapReadyResolve;
 const mapReady = new Promise(r => (mapReadyResolve = r));
 const markers = new Map();
-let userPos = null, userMarker = null, firstFit = true, lastHold = 0;
+let userPos = null, userMarker = null, firstFit = true, lastHold = 0, userTouchedMap = false;
 let curHeading = null, lastFix = null;
 const EMPTY_FC = { type: 'FeatureCollection', features: [] };
 
@@ -924,6 +926,7 @@ async function startApp() {
   });
   map.on('dragstart', () => { if (navActive && follow) { follow = false; $('#navRecenter').hidden = false; } });
   map.on('rotate', updateCompass);
+  ['dragstart', 'zoomstart'].forEach(ev => map.on(ev, e => { if (e.originalEvent) userTouchedMap = true; }));
   const farCheck = () => document.body.classList.toggle('far', map.getZoom() < 14);
   map.on('zoom', farCheck); farCheck();
   map.on('pitch', updateCompass);
@@ -1108,7 +1111,7 @@ function onPinsChanged() {
     attachHold(el, () => onPinHold(p.id));
     markers.set(p.id, m);
   }
-  if (firstFit && Store.pins.length) { firstFit = false; fitPins(); }
+  // 開いた時の表示は、現在地（取れない時は事業所）から。ピン全体には合わせない
   markRouteEnds();
   fixEnCategory();
   if (!$('#panel').hidden) renderList();
@@ -1170,6 +1173,8 @@ function startLocate() {
     if (h != null) curHeading = h;
     if (!lastFix || haversine(lastFix, p) > 8) lastFix = p;
     userPos = p;
+    // 最初に現在地が取れた時、まだ地図を触っていなければ現在地へ
+    if (firstFit && !userTouchedMap) { firstFit = false; map.jumpTo({ center: [p.lng, p.lat], zoom: 16 }); }
     if (!userMarker) {
       const el = document.createElement('div');
       el.className = 'me';
@@ -2157,6 +2162,14 @@ function setManeuver(r, step) {
     ] });
   });
 }
+// ルートの最初の向きを「北・北東・東…」で
+function startDirection(r) {
+  const cum = cumDist(r); let k = 1;
+  while (k < r.coords.length - 1 && cum[k] < 30) k++;
+  const a = r.coords[0], b = r.coords[k];
+  const deg = bearingDeg({ lng: a[0], lat: a[1] }, { lng: b[0], lat: b[1] });
+  return ['北', '北東', '東', '南東', '南', '南西', '西', '北西'][Math.round(deg / 45) % 8];
+}
 // ルート上のどこにいるか（点の番号）
 let navIdx = 0;
 function nearestIdx(r, p) {
@@ -2179,7 +2192,7 @@ async function startNav() {
   $('#navGmaps').href = gmapsUrl(null, routeDest, routeMode, stopPoints());
   $('#routeCard').hidden = true; closeMenu();
   drawRoutes([route], 0, false);   // ナビ中は選んだルートだけ
-  set3D(true);
+  set3D(nav3d);
   loadSignals(route).then(s => { if (navActive) { setSignals(s); updateNav(); } });
   // まだ動いていない時は、ルートの最初の向きを使う
   if (curHeading == null || haversine(userPos, { lng: route.coords[0][0], lat: route.coords[0][1] }) < 60) {
@@ -2193,11 +2206,20 @@ async function startNav() {
 // 建物をうっすら立体に（ナビ中だけ）
 function set3D(on) { mapReady.then(() => { if (map.getLayer('building-3d')) map.setLayoutProperty('building-3d', 'visibility', on ? 'visible' : 'none'); }); }
 let navZoom = 17.3;
+// 2D（真上から）が基本。3D が好きな人は切り替えられる（端末ごとに覚える）
+let nav3d = lsGet('sunrise_nav3d') === '1';
+function setViewBtn() { $('#nav3d').textContent = nav3d ? '3D' : '2D'; $('#nav3d').setAttribute('aria-pressed', nav3d); }
+setViewBtn();
+$('#nav3d').addEventListener('click', () => {
+  nav3d = !nav3d; lsSet('sunrise_nav3d', nav3d ? '1' : '0'); setViewBtn();
+  set3D(nav3d); follow = true; $('#navRecenter').hidden = true; navCamera(500);
+  toast(nav3d ? '3D（斜めから）で表示します' : '2D（真上から）で表示します');
+});
 function navCamera(duration = 900) {
   if (!navActive || !userPos) return;
   map.easeTo({
     center: [userPos.lng, userPos.lat], zoom: navZoom,
-    bearing: headingUp ? (curHeading || 0) : 0, pitch: headingUp ? 60 : 0,
+    bearing: headingUp ? (curHeading || 0) : 0, pitch: headingUp && nav3d ? 60 : 0,
     padding: { top: Math.round(innerHeight * 0.45), bottom: 110, left: 0, right: 0 },
     duration, easing: t => t,
   });
@@ -2241,14 +2263,24 @@ function updateNav(first) {
   const remSec = route.dist ? route.time * rem / route.dist : 0;
 
   const sig = signalPhrase(route, navIdx, next), action = sig + next.verb;
-  $('#navArrow').innerHTML = svgInner(arrowSvg(next, '#fff'));
-  $('#navDist').textContent = fmtDist(dNext);
-  $('#navSub').textContent = next.road ? action : '';
-  $('#navRoad').textContent = next.road || action;
-  // 曲がってすぐ次も曲がる時は「その先」を出す
+  // 出発してすぐ（ルートの始まりから40m以内）は、Googleマップと同じく「南東に進む」と出す
+  const starting = stepIdx === 0 && cum[navIdx] < 40;
+  if (starting) {
+    const dir = startDirection(route), road0 = steps[0]?.road;
+    $('#navArrow').innerHTML = svgInner(arrowSvg({ angle: 0 }, '#fff'));
+    $('#navDist').textContent = '';
+    $('#navSub').textContent = road0 ? `${dir}に進む` : '';
+    $('#navRoad').textContent = road0 || `${dir}に進む`;
+  } else {
+    $('#navArrow').innerHTML = svgInner(arrowSvg(next, '#fff'));
+    $('#navDist').textContent = fmtDist(dNext);
+    $('#navSub').textContent = next.road ? action : '';
+    $('#navRoad').textContent = next.road || action;
+  }
+  // 「その先」：出発直後は最初に曲がる方向、曲がってすぐ次も曲がる時はその次の方向
   document.documentElement.style.setProperty('--navtop-h', $('#navTop').offsetHeight + 'px');
-  const then = steps[nextI + 1];
-  if (then && next.dist < 150 && !next.arrive) {
+  const then = starting ? next : steps[nextI + 1];
+  if (then && (starting || (next.dist < 150 && !next.arrive))) {
     $('#navThenArrow').innerHTML = svgInner(arrowSvg(then, '#fff')); $('#navThen').hidden = false;
   } else $('#navThen').hidden = true;
   $('#navLeft').textContent = fmtDur(remSec);
@@ -2258,7 +2290,7 @@ function updateNav(first) {
   navZoom = dNext < 250 && isTurn(next) ? 18.3 : 17.3;
 
   const say = `${action}${next.road && !next.arrive && !next.via ? '、' + next.road + '方面' : ''}です`;
-  if (first) { speak(`ルート案内を開始します。${speechDist(dNext)}先、${say}`); announced.add(nextI + 'far'); }
+  if (first) { speak(`ルート案内を開始します。${startDirection(route)}に進んでください。${speechDist(dNext)}先、${say}`); announced.add(nextI + 'far'); }
   else if (dNext > 400 && !announced.has(nextI + 'far')) { announced.add(nextI + 'far'); speak(`${speechDist(dNext)}先、${say}`); }
   else if (dNext < 150 && !announced.has(nextI + 'near')) { announced.add(nextI + 'near'); announced.add(nextI + 'far'); speak(`まもなく、${say}`); }
 
