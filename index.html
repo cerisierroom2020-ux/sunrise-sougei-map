@@ -266,6 +266,15 @@ body.navigating .aerial-mini{bottom:calc(var(--sb) + 132px)}
 .nav-then svg{width:22px;height:22px}
 .nav-side{position:absolute;z-index:1300;right:12px;top:40%;display:grid;gap:12px}
 .view-btn{font-weight:900;font-size:16px;color:var(--ink)}
+.avoid-ico{display:inline-block;width:20px;height:20px;border-radius:50%;background:#D93025;position:relative;flex:none}
+.avoid-ico::after{content:"";position:absolute;left:4px;right:4px;top:8.5px;height:3px;border-radius:2px;background:#fff}
+.avoid-round .avoid-ico{width:26px;height:26px}
+.avoid-round .avoid-ico::after{left:5px;right:5px;top:11.5px}
+.avoid-btn{color:#D93025}
+.avoid-mk{width:22px;height:22px;border-radius:50%;background:#D93025;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35);position:relative;cursor:pointer}
+.avoid-mk::after{content:"";position:absolute;left:4px;right:4px;top:8px;height:3px;border-radius:2px;background:#fff}
+body.far .avoid-mk{transform:scale(.7)}
+.step-avoid{margin-left:6px;border:1px solid #F1B3AE;background:#FDECEA;color:#B3261E;border-radius:999px;font-size:11px;font-weight:700;padding:3px 8px;flex:none}
 .nav-bottom{position:absolute;z-index:1300;left:0;right:0;bottom:0;background:var(--surface);border-radius:20px 20px 0 0;box-shadow:var(--shadow);padding:14px 16px calc(var(--sb) + 14px);display:flex;align-items:center;gap:10px}
 @media (min-width:760px){.nav-bottom{left:12px;right:auto;width:440px;bottom:12px;border-radius:20px}}
 .nav-stats{flex:1;min-width:0}
@@ -454,6 +463,24 @@ body.navigating .maplibregl-ctrl-bottom-right,body.has-sheet .maplibregl-ctrl-bo
       <button class="btn blue" id="plRoute">ここへ行く</button>
       <button class="btn" id="plAerial">航空写真</button>
     </div>
+    <div class="actions">
+      <button class="btn ghost avoid-btn" id="plAvoid"><span class="avoid-ico"></span>通れない道として登録</button>
+    </div>
+  </section>
+
+  <!-- 通れない道（登録済み） -->
+  <section class="sheet" id="avoidSheet" hidden aria-label="通れない道">
+    <div class="grab-zone"><div class="grab"></div></div>
+    <div class="sheet-head">
+      <div>
+        <span class="chip" style="--c:#D93025">通れない道</span>
+        <h2>この道はルートに使いません</h2>
+        <p class="meta" id="avInfo"></p>
+      </div>
+      <button class="icon-btn" data-close aria-label="閉じる"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+    <p class="memo" id="avMemo"></p>
+    <div class="actions"><button class="btn danger" id="avDelete">登録を取り消す</button></div>
   </section>
 
   <!-- ルート -->
@@ -486,6 +513,7 @@ body.navigating .maplibregl-ctrl-bottom-right,body.has-sheet .maplibregl-ctrl-bo
     <button class="round" id="navCompass" aria-label="進む向き／北を上 の切り替え"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 15 12H9z" fill="#E8453C"/><path d="M12 22 9 12h6z" fill="#9AA0A6"/></svg></button>
     <button class="round" id="navVoice" aria-label="音声案内" aria-pressed="true"></button>
     <button class="round view-btn" id="nav3d" aria-label="2D／3D の切り替え"></button>
+    <button class="round avoid-round" id="navAvoid" aria-label="この先の曲がる道は通れない"><span class="avoid-ico"></span></button>
   </div>
   <button class="recenter" id="navRecenter" hidden>
     <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2 4 20l8-4 8 4z"/></svg>現在地に戻る
@@ -655,6 +683,19 @@ body.navigating .maplibregl-ctrl-bottom-right,body.has-sheet .maplibregl-ctrl-bo
   </form>
 </div>
 
+<!-- 通れない道を登録 -->
+<div class="modal small" id="avoidModal" hidden>
+  <form id="avoidForm">
+    <h2>通れない道として登録</h2>
+    <p class="meta" id="avWhere"></p>
+    <label class="field"><span>理由（なくても大丈夫です）</span>
+      <input type="text" id="avNote" maxlength="80" placeholder="例：狭くてセレナでは曲がれない／私道／行き止まり">
+    </label>
+    <p class="note">登録すると、全員のルート検索でこの道を使わなくなります。地図の⛔マークから、いつでも取り消せます。</p>
+    <div class="form-actions"><button type="button" class="btn" data-modal-close>キャンセル</button><button type="submit" class="btn danger">登録する</button></div>
+  </form>
+</div>
+
 <div id="toast" role="status" hidden></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -687,7 +728,7 @@ const LINK_KEY = (location.hash.slice(1).match(/^[\w-]{4,64}$/) || [])[0] || nul
 const PASSWORD = '1001';
 
 // アプリの版。公開のたびに変える。開いた時にサーバーの版と違えば、1回だけ読み込み直す
-const APP_VERSION = '2026-10-03 追従と再検索の改善';
+const APP_VERSION = '2026-10-04 通れない道の対策';
 (async () => {
   try {
     const html = await fetch(location.pathname + '?v=' + Date.now(), { cache: 'no-store' }).then(r => r.text());
@@ -1108,6 +1149,7 @@ function onPinsChanged() {
   // マーカーを描き直す
   markers.forEach(m => m.remove()); markers.clear();
   for (const p of Store.pins) {
+    if (p.category === 'avoid') { markers.set(p.id, makeAvoidMarker(p)); continue; }
     const m = makePinMarker(p).addTo(map), el = m.getElement();
     el.setAttribute('role', 'button'); el.setAttribute('aria-label', p.name);
     el.addEventListener('click', e => { e.stopPropagation(); if (Date.now() - lastHold < 800) return; openPinSheet(p.id); });
@@ -1254,12 +1296,12 @@ $('#btnCompass').addEventListener('click', () => map.easeTo({ bearing: 0, pitch:
 // 下から出る画面の高さ分、右側のボタン（現在地など）を上に逃がす
 function setSheetH(px) { document.documentElement.style.setProperty('--sheet-h', px + 'px'); }
 const sheetRO = new ResizeObserver(() => {
-  const open = ['#pinSheet', '#placeSheet', '#routeSheet'].map(s => $(s)).find(el => !el.hidden);
+  const open = ['#pinSheet', '#placeSheet', '#routeSheet', '#avoidSheet'].map(s => $(s)).find(el => !el.hidden);
   setSheetH(open && innerWidth < 760 ? open.offsetHeight : 0);
 });
-['#pinSheet', '#placeSheet', '#routeSheet'].forEach(s => sheetRO.observe($(s)));
+['#pinSheet', '#placeSheet', '#routeSheet', '#avoidSheet'].forEach(s => sheetRO.observe($(s)));
 function closeSheets() {
-  ['#pinSheet', '#placeSheet', '#routeSheet'].forEach(s => { const el = $(s); el.hidden = true; el.style.height = ''; });
+  ['#pinSheet', '#placeSheet', '#routeSheet', '#avoidSheet'].forEach(s => { const el = $(s); el.hidden = true; el.style.height = ''; });
   document.body.classList.remove('has-sheet'); setSheetH(0);
   if (!navActive) { clearRoute(); setRouting(false); $('#routeCard').hidden = true; closeMenu(); }
   clearDraft();
@@ -1478,7 +1520,7 @@ function openAerialFull() {
    ========================================================= */
 function localMatches(q) {
   const s = q.toLowerCase();
-  return Store.pins.filter(p => [p.name, p.address, p.memo].some(v => (v || '').toLowerCase().includes(s))).slice(0, 8);
+  return Store.pins.filter(p => p.category !== 'avoid' && [p.name, p.address, p.memo].some(v => (v || '').toLowerCase().includes(s))).slice(0, 8);
 }
 function renderResults(local, remote, q) {
   const box = $('#results');
@@ -1551,7 +1593,7 @@ $('#filters').addEventListener('click', e => {
 });
 function renderList() {
   const order = Object.keys(CATS);
-  const pins = Store.pins.filter(p => listFilter === 'all' || p.category === listFilter)
+  const pins = Store.pins.filter(p => p.category !== 'avoid' && (listFilter === 'all' || p.category === listFilter))
     .sort((a, b) => order.indexOf(a.category) - order.indexOf(b.category) || a.name.localeCompare(b.name, 'ja'));
   $('#list').innerHTML = pins.length ? pins.map(p => {
     const c = CATS[p.category] || CATS.other;
@@ -1560,7 +1602,9 @@ function renderList() {
   }).join('') : '<div class="result-empty">まだ登録がありません。地図を長押しするか＋ボタンで登録できます。</div>';
   const cloud = Store.mode === 'cloud';
   $('#statusDot').className = 'status-dot' + (cloud ? ' cloud' : '');
-  $('#statusText').textContent = cloud ? `保存先：共有（全員に表示）・${Store.pins.length}件` : `保存先：この端末のみ（お試しモード）・${Store.pins.length}件`;
+  const nPlaces = Store.pins.filter(p => p.category !== 'avoid').length, nAvoid = avoidPins().length;
+  $('#statusText').textContent = (cloud ? `保存先：共有（全員に表示）・${nPlaces}件` : `保存先：この端末のみ（お試しモード）・${nPlaces}件`) +
+    (nAvoid ? `・通れない道${nAvoid}か所` : '');
   const local = Store.localOnlyPins();
   $('#btnMigrate').hidden = !local.length;
   $('#btnMigrate').textContent = `この端末だけにあるピン${local.length}件を共有する`;
@@ -1718,7 +1762,7 @@ function pointOptions(selected) {
   const opts = [`<option value="${HERE}">現在地</option>`];
   if (customDest) opts.push(`<option value="${CUSTOM}">${esc(customDest.name)}</option>`);
   const order = Object.keys(CATS);
-  [...Store.pins].sort((a, b) => order.indexOf(a.category) - order.indexOf(b.category) || a.name.localeCompare(b.name, 'ja'))
+  Store.pins.filter(p => p.category !== 'avoid').sort((a, b) => order.indexOf(a.category) - order.indexOf(b.category) || a.name.localeCompare(b.name, 'ja'))
     .forEach(p => opts.push(`<option value="${esc(p.id)}">${esc(p.name)}</option>`));
   return opts.join('').replace(`value="${esc(selected)}"`, `value="${esc(selected)}" selected`);
 }
@@ -1783,6 +1827,20 @@ function normTrip(t) {
   });
   return { coords, steps, time: t.summary.time, dist: t.summary.length * 1000, toll: !!t.summary.has_toll, highway: !!t.summary.has_highway, ferry: !!t.summary.has_ferry };
 }
+// 車の条件：セレナ（幅約1.7m・高さ約1.9m）が通れる道。路地・私道・敷地内通路・未舗装路・農道・生活道路はなるべく使わない
+const CAR_OPTS = {
+  width: 1.8, height: 1.95, exclude_unpaved: true, use_living_streets: 0.1, use_tracks: 0,
+  alley_factor: 8, service_penalty: 150, service_factor: 2, private_access_penalty: 3000,
+};
+// 職員が登録した「通れない道」のうち、今回のルートの近く（出発地〜目的地の周り約5km）にあるもの（最大50か所）
+const avoidPins = () => Store.pins.filter(p => p.category === 'avoid');
+function avoidNear(pts) {
+  const lats = pts.map(p => p.lat), lngs = pts.map(p => p.lng), m = 0.05;
+  const box = [Math.min(...lats) - m, Math.max(...lats) + m, Math.min(...lngs) - m, Math.max(...lngs) + m];
+  const mid = { lat: (box[0] + box[1]) / 2, lng: (box[2] + box[3]) / 2 };
+  return avoidPins().filter(p => p.lat > box[0] && p.lat < box[1] && p.lng > box[2] && p.lng < box[3])
+    .sort((a, b) => haversine(a, mid) - haversine(b, mid)).slice(0, 50);
+}
 async function valhalla(o, d, mode, alternates = 0, via = []) {
   const from = { lat: o.lat, lon: o.lng };
   if (o.heading != null) { from.heading = Math.round(o.heading); from.heading_tolerance = 60; }
@@ -1793,10 +1851,12 @@ async function valhalla(o, d, mode, alternates = 0, via = []) {
     directions_options: { language: 'ja-JP', units: 'kilometers' },
   };
   if (costing === 'auto') {
-    const a = { use_tolls: ropt.tolls ? 0 : 0.5, use_highways: ropt.highways ? 0 : 0.5, use_ferry: ropt.ferry ? 0 : 0.5 };
+    const a = { ...CAR_OPTS, use_tolls: ropt.tolls ? 0 : 0.5, use_highways: ropt.highways ? 0 : 0.5, use_ferry: ropt.ferry ? 0 : 0.5 };
     // 初心者向け：曲がる回数を減らし、生活道路・私道・路地・農道をなるべく使わない
     if (mode === 'beginner') Object.assign(a, { maneuver_penalty: 45, use_living_streets: 0, use_tracks: 0, service_penalty: 600, service_factor: 8, destination_only_penalty: 600 });
     body.costing_options = { auto: a };
+    const ex = avoidNear([o, ...via, d]);
+    if (ex.length) body.exclude_locations = ex.map(p => ({ lat: p.lat, lon: p.lng }));
   } else body.costing_options = { [costing]: { use_ferry: ropt.ferry ? 0 : 0.5 } };
   const r = await fetch(VALHALLA + encodeURIComponent(JSON.stringify(body)));
   const j = await r.json();
@@ -1885,7 +1945,7 @@ function renderRouteSheet(msg) {
     $('#rsOpts').innerHTML = set.map((r, i) => `<button class="ropt" data-i="${i}" aria-pressed="${i === selIdx}">
       <b>${fmtDur(T(r))}</b><span>${fmtDist(r.dist)}${isCar(routeMode) ? (r.toll ? '・有料' : '・一般道') : ''}</span><small>${i === 0 ? '最速' : 'ルート' + (i + 1)}</small></button>`).join('');
   }
-  $('#rsSteps').innerHTML = route.steps.map(s => `<li>${arrowSvg(s)}<span>${s.signal && isTurn(s) ? '信号を' : ''}${esc(s.verb)}${s.road ? '　' + esc(s.road) : ''}</span><small>${s.dist ? fmtDist(s.dist) : ''}</small></li>`).join('') +
+  $('#rsSteps').innerHTML = route.steps.map((s, i) => `<li>${arrowSvg(s)}<span>${s.signal && isTurn(s) ? '信号を' : ''}${esc(s.verb)}${s.road ? '　' + esc(s.road) : ''}</span><small>${s.dist ? fmtDist(s.dist) : ''}</small>${isCar(routeMode) && isTurn(s) ? `<button class="step-avoid" data-avoid-step="${i}" title="この曲がる先の道は通れない">通れない</button>` : ''}</li>`).join('') +
     (route.signals ? `<li class="meta">このルートの信号：${route.signals.length}か所</li>` : '');
   $('#rsStepsWrap').hidden = false;
 }
@@ -2388,6 +2448,76 @@ function switchNavRoute(i) {
   useNavRoute(alt, [route, ...navAlts.filter(a => a !== alt)].filter(a => distToCoords(userPos, a.coords) < 200));
   speak('ルートを変更しました'); toast('ルートを変更しました');
 }
+
+
+/* =========================================================
+   通れない道：職員が登録 → 全員のルート検索で避ける
+   （データはピンと同じ場所に category:'avoid' で保存）
+   ========================================================= */
+function makeAvoidMarker(p) {
+  const el = document.createElement('div');
+  el.className = 'avoid-mk'; el.title = '通れない道'; el.setAttribute('role', 'button'); el.setAttribute('aria-label', '通れない道');
+  el.addEventListener('click', e => { e.stopPropagation(); openAvoidSheet(p.id); });
+  return new maplibregl.Marker({ element: el }).setLngLat([p.lng, p.lat]).addTo(map);
+}
+let avoidSheetId = null, avoidDraft = null;
+function openAvoidSheet(id) {
+  const p = Store.get(id); if (!p) return;
+  closeSheets(); hideAerialMini();
+  avoidSheetId = id;
+  const d = p.updatedAt ? new Date(p.updatedAt) : null;
+  $('#avInfo').textContent = (d ? `${d.getMonth() + 1}月${d.getDate()}日に登録` : '') + (p.address ? `・${p.address}` : '');
+  $('#avMemo').textContent = p.memo || ''; $('#avMemo').hidden = !p.memo;
+  showSheet('#avoidSheet');
+}
+$('#avDelete').addEventListener('click', () => {
+  const id = avoidSheetId; closeSheets(); Store.remove(id);
+  toast('登録を取り消しました。この道もルートに使うようになります');
+});
+// 登録画面を開く（where：画面に出す説明）
+function askAvoid(pt, where, after) {
+  avoidDraft = { ...pt, after };
+  $('#avWhere').textContent = where;
+  $('#avNote').value = '';
+  $('#avoidModal').hidden = false;
+}
+$('#avoidForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const d = avoidDraft; if (!d) return;
+  $('#avoidModal').hidden = true; avoidDraft = null;
+  const ok = await Store.save({ id: newId(), name: '通れない道', category: 'avoid', lat: d.lat, lng: d.lng,
+    address: d.address || '', memo: $('#avNote').value.trim(), updatedAt: Date.now() });
+  if (ok === false) return;
+  toast('通れない道として登録しました');
+  if (d.after) d.after();
+});
+// ルートの点の番号から、そこから m メートル先の地点
+function pointAlong(r, idx, m) {
+  const cum = cumDist(r), target = cum[idx] + m;
+  let k = idx + 1; while (k < cum.length - 1 && cum[k] < target) k++;
+  const a = r.coords[k - 1], b = r.coords[k], seg = cum[k] - cum[k - 1] || 1, t = Math.max(0, Math.min(1, (target - cum[k - 1]) / seg));
+  return { lng: a[0] + (b[0] - a[0]) * t, lat: a[1] + (b[1] - a[1]) * t };
+}
+// 長押しした地点
+$('#plAvoid').addEventListener('click', () => {
+  if (!draftPlace) return;
+  const p = { lat: draftPlace.lat, lng: draftPlace.lng, address: draftPlace.address };
+  askAvoid(p, `長押しした場所の道を、通れない道として登録します。${p.address ? '（' + p.address + '）' : ''}`, () => closeSheets());
+});
+// ルートの「曲がる場所の一覧」から（曲がった先の道を登録）
+$('#rsSteps').addEventListener('click', e => {
+  const b = e.target.closest('[data-avoid-step]'); if (!b || !route) return;
+  const s = route.steps[+b.dataset.avoidStep]; if (!s || s.idx == null) return;
+  e.preventDefault();
+  askAvoid(pointAlong(route, s.idx, 20), `「${s.verb}${s.road ? '　' + s.road : ''}」で曲がった先の道を登録して、ルートを探し直します。`, () => calcRoutes());
+});
+// ナビ中：次に曲がる先の道を登録して、すぐ探し直す
+$('#navAvoid').addEventListener('click', () => {
+  if (!route) return;
+  const next = route.steps[Math.min(stepIdx + 1, route.steps.length - 1)];
+  if (!next || next.idx == null || !isTurn(next)) { toast('この先に曲がる場所がありません'); return; }
+  askAvoid(pointAlong(route, next.idx, 20), `次の「${next.verb}${next.road ? '　' + next.road : ''}」で曲がる先の道を登録して、すぐ別のルートを探します。運転中は、同乗者が操作してください。`, () => { lastReroute = 0; reroute(); });
+});
 
 /* =========================================================
    Googleマップからの取り込み
