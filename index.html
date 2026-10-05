@@ -274,6 +274,12 @@ body.navigating .aerial-mini{bottom:calc(var(--sb) + 132px)}
 .avoid-mk{width:22px;height:22px;border-radius:50%;background:#D93025;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35);position:relative;cursor:pointer}
 .avoid-mk::after{content:"";position:absolute;left:4px;right:4px;top:8px;height:3px;border-radius:2px;background:#fff}
 body.far .avoid-mk{transform:scale(.7)}
+.rec-box{display:grid;gap:6px;padding:10px 12px;border-radius:12px;background:var(--surface-2);color:var(--ink)}
+.rec-row{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;flex-wrap:wrap}
+.rec-row.small{font-weight:500;color:var(--muted)}
+.rec-row input{width:18px;height:18px;accent-color:#0F5C55;flex:none}
+.link-btn{border:none;background:none;padding:0;color:var(--route);font-weight:700;font-size:13px;text-decoration:underline}
+.link-btn.danger{color:var(--danger)}
 .step-avoid{margin-left:6px;border:1px solid #F1B3AE;background:#FDECEA;color:#B3261E;border-radius:999px;font-size:11px;font-weight:700;padding:3px 8px;flex:none}
 .nav-bottom{position:absolute;z-index:1300;left:0;right:0;bottom:0;background:var(--surface);border-radius:20px 20px 0 0;box-shadow:var(--shadow);padding:14px 16px calc(var(--sb) + 14px);display:flex;align-items:center;gap:10px}
 @media (min-width:760px){.nav-bottom{left:12px;right:auto;width:440px;bottom:12px;border-radius:20px}}
@@ -558,6 +564,14 @@ body.navigating .maplibregl-ctrl-bottom-right,body.has-sheet .maplibregl-ctrl-bo
     <button class="btn primary" id="btnMigrate" style="width:100%" hidden></button>
     <button class="btn" id="btnImport" style="width:100%">Googleマップのピンを取り込む</button>
     <div class="status"><span class="status-dot" id="statusDot"></span><span id="statusText"></span></div>
+    <div class="rec-box">
+      <label class="rec-row"><input type="checkbox" id="recOn"> 走った道を記録して、次から「いつもの道」として案内する</label>
+      <div class="rec-row small"><span id="recInfo"></span>
+        <button class="link-btn" id="recClear">記録を消す</button>
+        <span id="recConfirm" hidden>本当に消しますか？ <button class="link-btn danger" id="recYes">消す</button> <button class="link-btn" id="recNo">やめる</button></span>
+      </div>
+      <div class="note">記録はこのスマホの中だけに残り、ほかの職員には送られません。</div>
+    </div>
     <div>アプリの版：<span id="appVer"></span></div>
   </footer>
 </aside>
@@ -699,6 +713,7 @@ body.navigating .maplibregl-ctrl-bottom-right,body.has-sheet .maplibregl-ctrl-bo
 <div id="toast" role="status" hidden></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/nosleep/0.12.0/NoSleep.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script>
 /* =========================================================
@@ -728,7 +743,7 @@ const LINK_KEY = (location.hash.slice(1).match(/^[\w-]{4,64}$/) || [])[0] || nul
 const PASSWORD = '1001';
 
 // アプリの版。公開のたびに変える。開いた時にサーバーの版と違えば、1回だけ読み込み直す
-const APP_VERSION = '2026-10-04 通れない道の対策';
+const APP_VERSION = '2026-10-04 いつもの道と画面の点灯';
 (async () => {
   try {
     const html = await fetch(location.pathname + '?v=' + Date.now(), { cache: 'no-store' }).then(r => r.text());
@@ -1237,6 +1252,7 @@ function startLocate() {
       const target = navTarget(p);
       moveMe(target, gap);
       if (follow) navCamera(gap, target);
+      recordPoint(p, c.accuracy);
     } else { cancelAnimationFrame(meAnim); shownPos = p; userMarker.setLngLat([p.lng, p.lat]); }
   }, () => {}, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
 }
@@ -1620,7 +1636,7 @@ $('#btnMigrate').addEventListener('click', async () => {
   toast(`${add.length}件を共有しました`);
   renderList();
 });
-function openPanel() { $('#appVer').textContent = APP_VERSION; renderList(); $('#panel').hidden = false; $('#scrim').hidden = false; hideResults(); }
+function openPanel() { $('#appVer').textContent = APP_VERSION; renderRecInfo(); renderList(); $('#panel').hidden = false; $('#scrim').hidden = false; hideResults(); }
 function closePanel() { $('#panel').hidden = true; $('#scrim').hidden = true; }
 $('#btnList').addEventListener('click', openPanel);
 $('#panelClose').addEventListener('click', closePanel);
@@ -1879,8 +1895,13 @@ async function calcRoutes() {
 }
 async function fetchMode(m, req) {
   try {
-    routeSets[m] = await valhalla(routeOrigin, routeDest, m, MODES[m].alts || 0, stopPoints());
-    routeSets[m].forEach(r => { r.buffer = MODES[m].buffer || 0; r.costing = MODES[m].costing || m; });
+    const [set, learned] = await Promise.all([
+      valhalla(routeOrigin, routeDest, m, MODES[m].alts || 0, stopPoints()),
+      m === 'auto' ? learnedRoute().catch(() => null) : null,
+    ]);
+    set.forEach(r => { r.buffer = MODES[m].buffer || 0; r.costing = MODES[m].costing || m; });
+    // 自分が何度も走った「いつもの道」があれば、いちばん上（最初に選ばれる）に入れる
+    routeSets[m] = learned ? [learned, ...set] : set;
   }
   catch { routeSets[m] = 'err'; }
   if (req !== routeReq) return;
@@ -1933,7 +1954,8 @@ function renderRouteSheet(msg) {
     return;
   }
   const { depart, arrive } = plannedTimes(route);
-  const tag = routeMode === 'beginner' ? '初心者向け（余裕5分込み）' : selIdx === 0 ? '最速ルート' : 'ほかのルート';
+  const tag = route.learned ? `いつもの道（${route.learned.count}回走った道）` : routeMode === 'beginner' ? '初心者向け（余裕5分込み）'
+    : set.indexOf(route) === set.findIndex(r => !r.learned) ? '最速ルート' : 'ほかのルート';
   const road = isCar(routeMode) ? (route.toll ? '・有料道路あり' : '・有料道路なし') : '';
   const when = timePlan?.type === 'arrive'
     ? `<b>${fmtClock(arrive)} に着くには ${fmtClock(depart)} に出発</b>`
@@ -1943,7 +1965,7 @@ function renderRouteSheet(msg) {
     (routeMode === 'beginner' ? `<div class="meta">細い道や曲がる回数の多い道を、なるべく避けたルートです（運転だけなら約${fmtDur(route.time)}）</div>` : '');
   if (set.length > 1) {
     $('#rsOpts').innerHTML = set.map((r, i) => `<button class="ropt" data-i="${i}" aria-pressed="${i === selIdx}">
-      <b>${fmtDur(T(r))}</b><span>${fmtDist(r.dist)}${isCar(routeMode) ? (r.toll ? '・有料' : '・一般道') : ''}</span><small>${i === 0 ? '最速' : 'ルート' + (i + 1)}</small></button>`).join('');
+      <b>${fmtDur(T(r))}</b><span>${fmtDist(r.dist)}${isCar(routeMode) ? (r.toll ? '・有料' : '・一般道') : ''}</span><small>${r.learned ? 'いつもの道' : i === set.findIndex(x => !x.learned) ? '最速' : 'ルート' + (i + 1)}</small></button>`).join('');
   }
   $('#rsSteps').innerHTML = route.steps.map((s, i) => `<li>${arrowSvg(s)}<span>${s.signal && isTurn(s) ? '信号を' : ''}${esc(s.verb)}${s.road ? '　' + esc(s.road) : ''}</span><small>${s.dist ? fmtDist(s.dist) : ''}</small>${isCar(routeMode) && isTurn(s) ? `<button class="step-avoid" data-avoid-step="${i}" title="この曲がる先の道は通れない">通れない</button>` : ''}</li>`).join('') +
     (route.signals ? `<li class="meta">このルートの信号：${route.signals.length}か所</li>` : '');
@@ -2125,7 +2147,7 @@ function drawRoutes(set, sel, bubbles) {
     set.forEach((r, i) => {
       const el = document.createElement('button');
       el.className = 'route-bubble' + (i === sel ? ' sel' : '');
-      el.innerHTML = `<b>${fmtDur(T(r))}</b>${isCar(routeMode) && set.length > 1 ? `<small>${r.toll ? '有料' : '一般道'}</small>` : ''}`;
+      el.innerHTML = `<b>${fmtDur(T(r))}</b>${r.learned ? '<small>いつもの道</small>' : isCar(routeMode) && set.length > 1 ? `<small>${r.toll ? '有料' : '一般道'}</small>` : ''}`;
       el.addEventListener('click', e => { e.stopPropagation(); selectRoute(i, false); });
       bubbleMarkers.push(new maplibregl.Marker({ element: el, anchor: 'bottom', offset: [0, -6] }).setLngLat(bubblePoint(r, set[sel])).addTo(map));
     });
@@ -2180,12 +2202,45 @@ $('#navCompass').addEventListener('click', () => {
 $('#rsStart').addEventListener('click', async () => {
   if (!userPos) { toast('ナビには現在地が必要です。端末の位置情報をオンにしてください'); return; }
   if (routeTo === HERE) { toast('目的地が「現在地」になっています。↕で入れ替えてください'); return; }
+  keepAwake(true);   // 画面を消さない（ボタンを押したこの瞬間でないと、iPhone では効かない）
   if (routeFrom !== HERE || !route) {
     routeFrom = HERE; fillRouteCard(); await calcRoutes();
-    if (!Array.isArray(routeSets[routeMode])) return;
+    if (!Array.isArray(routeSets[routeMode])) { keepAwake(false); return; }
   }
   startNav();
 });
+
+/* ---------- ナビ中は画面を暗くしない・ロックしない ----------
+   ① 画面を点けたままにする仕組み（Wake Lock）と、② 音の出ない動画を裏で流し続ける方法（iPhone 用）を両方使う。
+   別のアプリから戻ってきた時や、画面をさわった時にも、もう一度お願いし直す */
+const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+let noSleepVideo = null, awake = false;
+try {
+  if (window.NoSleep) {
+    if (isIOS && 'wakeLock' in navigator) {
+      // iPhone のホーム画面アプリでは Wake Lock が効かないことがあるので、動画の方法で作る
+      const desc = Object.getOwnPropertyDescriptor(Navigator.prototype, 'wakeLock');
+      if (desc) { delete Navigator.prototype.wakeLock; noSleepVideo = new NoSleep(); Object.defineProperty(Navigator.prototype, 'wakeLock', desc); }
+    } else if (!('wakeLock' in navigator)) noSleepVideo = new NoSleep();
+  }
+} catch {}
+async function requestWakeLock() {
+  try { if (navigator.wakeLock && (!wakeLock || wakeLock.released)) wakeLock = await navigator.wakeLock.request('screen'); } catch {}
+}
+function keepAwake(on) {
+  awake = on;
+  if (on) {
+    requestWakeLock();
+    try { if (noSleepVideo && !noSleepVideo.isEnabled) noSleepVideo.enable().catch(() => {}); } catch {}
+  } else {
+    try { wakeLock?.release(); } catch {} wakeLock = null;
+    try { noSleepVideo?.disable(); } catch {}
+  }
+}
+document.addEventListener('visibilitychange', () => { if (awake && document.visibilityState === 'visible') keepAwake(true); });
+['touchend', 'click'].forEach(ev => document.addEventListener(ev, () => {
+  if (awake && ((noSleepVideo && !noSleepVideo.isEnabled) || (navigator.wakeLock && (!wakeLock || wakeLock.released)))) keepAwake(true);
+}, { passive: true }));
 /* ---------- 信号：ルート上の信号の位置を Valhalla から取得 ---------- */
 const VH_BASE = 'https://valhalla1.openstreetmap.de/';
 function encodePoly6(coords) {
@@ -2291,6 +2346,7 @@ function nearestIdx(r, p) {
 }
 
 async function startNav() {
+  startRecording();
   navActive = true; follow = true; headingUp = true; stepIdx = 0; announced = new Set(); offCount = 0; arrived = false; navIdx = -1;
   $('#pinSheet').hidden = $('#placeSheet').hidden = $('#routeSheet').hidden = true;
   document.body.classList.remove('has-sheet'); setSheetH(0);
@@ -2311,7 +2367,7 @@ async function startNav() {
   }
   navCamera(1200);
   updateNav(true);
-  try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
+  keepAwake(true);
 }
 // 建物をうっすら立体に（ナビ中だけ）
 function set3D(on) { mapReady.then(() => { if (map.getLayer('building-3d')) map.setLayoutProperty('building-3d', 'visibility', on ? 'visible' : 'none'); }); }
@@ -2335,13 +2391,14 @@ function navCamera(duration = 900, at = shownPos || userPos) {
   });
 }
 function endNav(msg) {
+  saveRecording(false);
   navActive = false;
   setRouting(false);
   document.body.classList.remove('navigating');
   $('#navTop').hidden = true; $('#navThen').hidden = true; $('#navBottom').hidden = true; $('#navSide').hidden = true; $('#navRecenter').hidden = true;
   clearRoute(); route = null; set3D(false);
   map.easeTo({ pitch: 0, bearing: 0, padding: { top: 0, bottom: 0, left: 0, right: 0 }, duration: 800 });
-  try { wakeLock?.release(); } catch {} wakeLock = null;
+  keepAwake(false);
   if (msg) toast(msg);
 }
 $('#navEnd').addEventListener('click', () => { try { speechSynthesis.cancel(); } catch {} endNav('ナビを終了しました'); });
@@ -2356,6 +2413,7 @@ function updateNav(first) {
     $('#navDist').textContent = ''; $('#navSub').textContent = '到着しました'; $('#navRoad').textContent = routeDest.name;
     $('#navThen').hidden = true; setManeuver(null);
     speak(`目的地、${routeDest.name}に到着しました`);
+    saveRecording(true);
     setTimeout(() => endNav('目的地に到着しました'), 4000);
     return;
   }
@@ -2518,6 +2576,87 @@ $('#navAvoid').addEventListener('click', () => {
   if (!next || next.idx == null || !isTurn(next)) { toast('この先に曲がる場所がありません'); return; }
   askAvoid(pointAlong(route, next.idx, 20), `次の「${next.verb}${next.road ? '　' + next.road : ''}」で曲がる先の道を登録して、すぐ別のルートを探します。運転中は、同乗者が操作してください。`, () => { lastReroute = 0; reroute(); });
 });
+
+
+/* =========================================================
+   走った道の記録と「いつもの道」（このスマホの中だけ）
+   ========================================================= */
+const TRIPS_KEY = 'sunrise_trips_v1';
+let recOn = lsGet('sunrise_rec') !== '0', rec = null;
+const loadTrips = () => { try { return JSON.parse(lsGet(TRIPS_KEY) || '[]'); } catch { return []; } };
+// 場所の呼び名：登録したピンの近く（200m以内）ならそのピン、なければ約500m四方のマス目
+function placeKey(p) {
+  if (!p) return null;
+  if (p.id && Store.get(p.id)) return 'pin:' + p.id;
+  let best = null, bd = 200;
+  for (const q of Store.pins) { if (q.category === 'avoid') continue; const d = haversine(p, q); if (d < bd) { bd = d; best = q; } }
+  return best ? 'pin:' + best.id : `g:${Math.round(p.lat * 200)},${Math.round(p.lng * 200)}`;
+}
+function startRecording() {
+  rec = null;
+  if (!recOn || stops.length || !routeDest || !userPos) return;
+  rec = { from: placeKey(userPos), to: placeKey(routeDest), at: Date.now(), pts: [[userPos.lng, userPos.lat]] };
+}
+function recordPoint(p, acc) {
+  if (!rec || (acc && acc > 50)) return;
+  const last = rec.pts[rec.pts.length - 1];
+  if (haversine({ lng: last[0], lat: last[1] }, p) >= 15) rec.pts.push([p.lng, p.lat]);
+}
+// 目的地に着いた時（または目的地の300m以内でナビを終えた時）だけ保存する
+function saveRecording(arrivedNow) {
+  const r = rec; rec = null;
+  if (!r || r.pts.length < 5 || !routeDest) return;
+  if (!arrivedNow && haversine(userPos, routeDest) > 300) return;
+  r.pts.push([routeDest.lng, routeDest.lat]);
+  let dist = 0;
+  for (let i = 1; i < r.pts.length; i++) dist += haversine({ lng: r.pts[i - 1][0], lat: r.pts[i - 1][1] }, { lng: r.pts[i][0], lat: r.pts[i][1] });
+  if (dist < 300) return;
+  const trips = loadTrips();
+  trips.push({ from: r.from, to: r.to, at: r.at, dist: Math.round(dist), shape: encodePoly6(r.pts) });
+  // 古い記録から消して、最大300回分まで
+  while (trips.length > 300) trips.shift();
+  try { localStorage.setItem(TRIPS_KEY, JSON.stringify(trips)); } catch { toast('記録を保存できませんでした（スマホの空き容量を確認してください）'); }
+}
+// 2つの走った道が「同じ道」か（20か所を比べて、平均60m以内なら同じ）
+function sameWay(a, b) {
+  const step = Math.max(1, Math.floor(a.length / 20)); let sum = 0, n = 0;
+  for (let i = 0; i < a.length; i += step) { sum += distToCoords({ lng: a[i][0], lat: a[i][1] }, b); n++; }
+  return sum / n < 60;
+}
+// いちばん多く走った道（同じなら新しい方）を、道路に合わせ直して案内できる形にする
+async function learnedRoute() {
+  if (!recOn || stops.length || !routeOrigin || !routeDest) return null;
+  const from = placeKey(routeOrigin), to = placeKey(routeDest), since = Date.now() - 60 * 864e5;
+  const trips = loadTrips().filter(t => t.from === from && t.to === to && t.at > since)
+    .map(t => ({ ...t, c: decodePoly6(t.shape) })).sort((a, b) => b.at - a.at);
+  if (!trips.length) return null;
+  const groups = [];
+  for (const t of trips) { const g = groups.find(g => sameWay(g[0].c, t.c)); if (g) g.push(t); else groups.push([t]); }
+  groups.sort((a, b) => b.length - a.length || b[0].at - a[0].at);
+  const best = groups[0], rep = best[0];
+  // 今いる場所が、記録の出発点から離れすぎていたら使わない
+  if (haversine(routeOrigin, { lng: rep.c[0][0], lat: rep.c[0][1] }) > 300) return null;
+  const pts = rep.c.length > 400 ? rep.c.filter((_, i) => i % Math.ceil(rep.c.length / 400) === 0 || i === rep.c.length - 1) : rep.c;
+  const body = { encoded_polyline: encodePoly6(pts), shape_match: 'map_snap', costing: 'auto', directions_options: { language: 'ja-JP', units: 'kilometers' } };
+  const j = await fetch(VH_BASE + 'trace_route', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json());
+  if (!j.trip) return null;
+  const r = normTrip(j.trip);
+  r.learned = { count: best.length }; r.buffer = 0; r.costing = 'auto';
+  return r;
+}
+function renderRecInfo() {
+  $('#recOn').checked = recOn;
+  const n = loadTrips().length;
+  $('#recInfo').textContent = n ? `記録：${n}回分` : 'まだ記録はありません';
+  $('#recClear').hidden = !n; $('#recConfirm').hidden = true;
+}
+$('#recOn').addEventListener('change', e => {
+  recOn = e.target.checked; lsSet('sunrise_rec', recOn ? '1' : '0');
+  toast(recOn ? 'ナビで走った道を記録します' : '記録を止めました（今までの記録は残っています）');
+});
+$('#recClear').addEventListener('click', () => { $('#recClear').hidden = true; $('#recConfirm').hidden = false; });
+$('#recNo').addEventListener('click', renderRecInfo);
+$('#recYes').addEventListener('click', () => { try { localStorage.removeItem(TRIPS_KEY); } catch {} renderRecInfo(); toast('走った道の記録を消しました'); });
 
 /* =========================================================
    Googleマップからの取り込み
