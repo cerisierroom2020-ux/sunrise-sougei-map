@@ -743,7 +743,7 @@ const LINK_KEY = (location.hash.slice(1).match(/^[\w-]{4,64}$/) || [])[0] || nul
 const PASSWORD = '1001';
 
 // アプリの版。公開のたびに変える。開いた時にサーバーの版と違えば、1回だけ読み込み直す
-const APP_VERSION = '2026-10-04 いつもの道と画面の点灯';
+const APP_VERSION = '2026-10-26 曲がる案内の修正';
 (async () => {
   try {
     const html = await fetch(location.pathname + '?v=' + Date.now(), { cache: 'no-store' }).then(r => r.text());
@@ -1900,8 +1900,10 @@ async function fetchMode(m, req) {
       m === 'auto' ? learnedRoute().catch(() => null) : null,
     ]);
     set.forEach(r => { r.buffer = MODES[m].buffer || 0; r.costing = MODES[m].costing || m; });
-    // 自分が何度も走った「いつもの道」があれば、いちばん上（最初に選ばれる）に入れる
-    routeSets[m] = learned ? [learned, ...set] : set;
+    // 自分が何度も走った「いつもの道」があれば、いちばん上（最初に選ばれる）に入れる。
+    // ただし最速ルートより3割以上長いものは、記録がおかしいとみなして使わない
+    const okLearned = learned && learned.dist <= set[0].dist * 1.3 ? learned : null;
+    routeSets[m] = okLearned ? [okLearned, ...set] : set;
   }
   catch { routeSets[m] = 'err'; }
   if (req !== routeReq) return;
@@ -2287,9 +2289,9 @@ function loadSignals(r) {
 }
 const isTurn = s => s.angle != null && s.angle !== 0 && !s.arrive && !s.via;
 // 「次の信号を」「2つ目の信号を」：今いる所から曲がる場所までの信号の数で決める
-function signalPhrase(r, fromIdx, step) {
+function signalPhrase(r, uProg, step) {
   if (!r.signals || !step.signal || !isTurn(step)) return '';
-  const cum = cumDist(r), u = cum[fromIdx] || 0, m = cum[step.idx];
+  const cum = cumDist(r), u = uProg || 0, m = cum[step.idx];
   const n = r.signals.filter(g => cum[g.idx] > u + 10 && cum[g.idx] < m - 25).length + 1;
   return n === 1 ? '次の信号を' : n <= 3 ? `${n}つ目の信号を` : '信号を';
 }
@@ -2333,21 +2335,34 @@ function startDirection(r) {
   return ['北', '北東', '東', '南東', '南', '南西', '西', '北西'][Math.round(deg / 45) % 8];
 }
 // ルート上のどこにいるか（点の番号）
-let navIdx = 0;
-function nearestIdx(r, p) {
-  let best = Math.max(0, navIdx), bd = Infinity;
+let navIdx = 0, navProg = 0;   // navProg：ルートの始まりから、今いる所までの距離（m）
+// 今いる場所を、ルートの線の上に正確に乗せて「始まりから何m進んだか」を出す。
+// 交差点では曲がった先の道の方が近く見えることがあるので、走っている向きと逆の線・大きな後戻り・急な先飛びは選ばない
+function trackProgress(r, p) {
+  const cs = r.coords, cum = cumDist(r), kx = 111320 * Math.cos(p.lat * Math.PI / 180), ky = 110540;
   const full = navIdx < 0;
-  const lo = full ? 0 : Math.max(0, navIdx - 10), hi = full ? r.coords.length : Math.min(r.coords.length, navIdx + 600);
+  const lo = full ? 0 : Math.max(0, navIdx - 3), hi = full ? cs.length - 1 : Math.min(cs.length - 1, navIdx + 80);
+  let best = null;
   for (let i = lo; i < hi; i++) {
-    const c = r.coords[i], d = haversine(p, { lng: c[0], lat: c[1] });
-    if (d < bd) { bd = d; best = i; }
+    const ax = (cs[i][0] - p.lng) * kx, ay = (cs[i][1] - p.lat) * ky, bx = (cs[i + 1][0] - p.lng) * kx, by = (cs[i + 1][1] - p.lat) * ky;
+    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+    const t = l2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / l2)) : 0;
+    let d = Math.hypot(ax + t * dx, ay + t * dy);
+    const prog = cum[i] + t * (cum[i + 1] - cum[i]);
+    if (gpsSpeed > 2 && curHeading != null && l2 > 4) {
+      const segBrg = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
+      if (Math.abs(((curHeading - segBrg) + 540) % 360 - 180) > 100) d += 40;
+    }
+    if (!full && prog < navProg - 30) d += 30;
+    if (!full && prog > navProg + 150) d += 40;
+    if (!best || d < best.d) best = { d, i, prog };
   }
-  return best;
+  if (best) { navIdx = best.i; navProg = best.prog; }
 }
 
 async function startNav() {
   startRecording();
-  navActive = true; follow = true; headingUp = true; stepIdx = 0; announced = new Set(); offCount = 0; arrived = false; navIdx = -1;
+  navActive = true; follow = true; headingUp = true; stepIdx = 0; announced = new Set(); offCount = 0; arrived = false; navIdx = -1; navProg = 0;
   $('#pinSheet').hidden = $('#placeSheet').hidden = $('#routeSheet').hidden = true;
   document.body.classList.remove('has-sheet'); setSheetH(0);
   hideAerialMini(); clearDraft();
@@ -2417,22 +2432,22 @@ function updateNav(first) {
     setTimeout(() => endNav('目的地に到着しました'), 4000);
     return;
   }
-  navIdx = nearestIdx(route, userPos);
-  // 曲がる場所を通り過ぎたら次へ（25m以内に近づいた、またはルート上で追い越した）
+  trackProgress(route, userPos);
+  // 曲がる場所を「実際に12m以上通り過ぎてから」次の案内に切り替える（手前で切り替えると、次の曲がる方向を先に言ってしまう）
   const cum = cumDist(route);
   while (stepIdx < steps.length - 1) {
     const s = steps[stepIdx + 1];
-    if (haversine(userPos, s.loc) < 25 || (s.idx != null && cum[navIdx] > cum[s.idx] + 15)) stepIdx++;
+    if (s.idx != null ? navProg > cum[s.idx] + 12 : haversine(userPos, s.loc) < 15) stepIdx++;
     else break;
   }
   const nextI = Math.min(stepIdx + 1, steps.length - 1), next = steps[nextI];
-  const dNext = next.idx != null ? Math.max(0, cum[next.idx] - cum[navIdx]) : haversine(userPos, next.loc);
+  const dNext = next.idx != null ? Math.max(0, cum[next.idx] - navProg) : haversine(userPos, next.loc);
   let rem = dNext; for (let k = nextI; k < steps.length; k++) rem += steps[k].dist;
   const remSec = route.dist ? route.time * rem / route.dist : 0;
 
-  const sig = signalPhrase(route, navIdx, next), action = sig + next.verb;
+  const sig = signalPhrase(route, navProg, next), action = sig + next.verb;
   // 出発してすぐ（ルートの始まりから40m以内）は、Googleマップと同じく「南東に進む」と出す
-  const starting = stepIdx === 0 && cum[navIdx] < 40;
+  const starting = stepIdx === 0 && navProg < 40;
   if (starting) {
     const dir = startDirection(route), road0 = steps[0]?.road;
     $('#navArrow').innerHTML = svgInner(arrowSvg({ angle: 0 }, '#fff'));
@@ -2487,7 +2502,8 @@ async function reroute() {
   try {
     const passed = route.steps.slice(0, stepIdx + 1).filter(s => s.via).length;
     if (passed) stops = stops.slice(passed);
-    const set = await valhalla({ ...userPos, heading: curHeading }, routeDest, routeMode, 1, stopPoints());
+    // 走っている時（時速約7km以上）だけ、進んでいる向きを伝える。止まっている時の向きはあてにならない
+    const set = await valhalla({ ...userPos, heading: gpsSpeed > 2 ? curHeading : null }, routeDest, routeMode, 1, stopPoints());
     if (!navActive) return;
     set.forEach(r => { r.buffer = MODES[routeMode].buffer || 0; r.costing = MODES[routeMode].costing || routeMode; });
     useNavRoute(set[0], set.slice(1));
@@ -2496,7 +2512,7 @@ async function reroute() {
 }
 // ナビ中のルートを入れ替える（再検索・ほかのルートをタップした時）
 function useNavRoute(r, alts) {
-  route = r; navAlts = alts; stepIdx = 0; navIdx = -1; announced = new Set();
+  route = r; navAlts = alts; stepIdx = 0; navIdx = -1; navProg = 0; announced = new Set();
   drawNav();
   loadSignals(r).then(s => { if (navActive && route === r) { setSignals(s); updateNav(); } });
   updateNav();
@@ -2598,7 +2614,7 @@ function startRecording() {
   rec = { from: placeKey(userPos), to: placeKey(routeDest), at: Date.now(), pts: [[userPos.lng, userPos.lat]] };
 }
 function recordPoint(p, acc) {
-  if (!rec || (acc && acc > 50)) return;
+  if (!rec || (acc && acc > 25)) return;
   const last = rec.pts[rec.pts.length - 1];
   if (haversine({ lng: last[0], lat: last[1] }, p) >= 15) rec.pts.push([p.lng, p.lat]);
 }
@@ -2637,10 +2653,17 @@ async function learnedRoute() {
   // 今いる場所が、記録の出発点から離れすぎていたら使わない
   if (haversine(routeOrigin, { lng: rep.c[0][0], lat: rep.c[0][1] }) > 300) return null;
   const pts = rep.c.length > 400 ? rep.c.filter((_, i) => i % Math.ceil(rep.c.length / 400) === 0 || i === rep.c.length - 1) : rep.c;
-  const body = { encoded_polyline: encodePoly6(pts), shape_match: 'map_snap', costing: 'auto', directions_options: { language: 'ja-JP', units: 'kilometers' } };
+  const body = {
+    encoded_polyline: encodePoly6(pts), shape_match: 'map_snap', costing: 'auto',
+    // 曲がる回数が増えるほど選ばれにくくして、GPS の揺れで横道に入ったようなルートにならないようにする
+    trace_options: { search_radius: 30, gps_accuracy: 15, turn_penalty_factor: 300 },
+    directions_options: { language: 'ja-JP', units: 'kilometers' },
+  };
   const j = await fetch(VH_BASE + 'trace_route', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json());
   if (!j.trip) return null;
   const r = normTrip(j.trip);
+  // Uターンが入るような不自然な記録は使わない
+  if (r.steps.some(st => st.type === 12 || st.type === 13)) return null;
   r.learned = { count: best.length }; r.buffer = 0; r.costing = 'auto';
   return r;
 }
